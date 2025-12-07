@@ -448,9 +448,25 @@ namespace ds_internal
         GLint uGroundTex_ = -1;
         GLint uGroundScale_ = -1;
         GLint uGroundOffset_ = -1;
+        GLint uGroundUseTex_ = -1;
 
         void initGroundProgram();
         void initGroundMesh();
+
+        // sky 用 VAO/VBO
+        GLuint programSky_ = 0;
+        GLint uSkyMVP_ = -1;
+        GLint uSkyColor_ = -1;
+        GLint uSkyTex_ = -1;
+        GLint uSkyScale_ = -1;
+        GLint uSkyOffset_ = -1;
+        GLint uSkyUseTex_ = -1;
+
+        GLuint vaoSky_ = 0;
+        GLuint vboSky_ = 0;
+
+        void initSkyProgram();
+        void initSkyMesh();
 
         // 必要ならカメラパラメータも保存
         float cam_x_ = 0.0f, cam_y_ = 0.0f, cam_z_ = 0.0f;

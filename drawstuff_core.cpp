@@ -446,20 +446,25 @@ void main()
 
         uniform sampler2D uTex;
         uniform vec4 uColor;
+        uniform int  uUseTex; // 1 = テクスチャ使用, 0 = 単色
 
         out vec4 FragColor;
 
         void main()
         {
-            // vec3 N = normalize(vNormal);
-            // 適当な平行光源
-            // float diff = max(dot(N, normalize(vec3(0.2, 0.5, 1.0))), 0.0);
+            vec3 rgb;
 
-            vec4 texColor = texture(uTex, vTex);
-            // vec3 base = uColor.rgb * texColor.rgb;
-            // vec3 rgb = base * (0.3 + 0.7 * diff);
-            vec3 rgb = uColor.rgb * texColor.rgb;
-            FragColor = vec4(rgb, uColor.a * texColor.a);
+            if (uUseTex == 1)
+            {
+                vec4 texColor = texture(uTex, vTex);
+                rgb = uColor.rgb * texColor.rgb;
+            }
+            else
+            {
+                // テクスチャなし
+                rgb = uColor.rgb;
+            }
+            FragColor = vec4(rgb, uColor.a);
         }
     )GLSL";
 
@@ -480,6 +485,7 @@ void main()
         uGroundTex_ = glGetUniformLocation(programGround_, "uTex");
         uGroundScale_ = glGetUniformLocation(programGround_, "uGroundScale");
         uGroundOffset_ = glGetUniformLocation(programGround_, "uGroundOffset");
+        uGroundUseTex_ = glGetUniformLocation(programGround_, "uUseTex");
     }
 
     void DrawstuffApp::initGroundMesh()
@@ -532,6 +538,132 @@ void main()
             sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
 
         // layout(location = 2) color
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            2, 4, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
+
+        glBindVertexArray(0);
+    }
+
+    void DrawstuffApp::initSkyProgram()
+    {
+        if (programSky_ != 0)
+            return;
+        static const char *sky_vs_src = R"GLSL(
+#version 330 core
+
+layout(location = 0) in vec3 aPos;
+
+uniform mat4 uMVP;
+uniform float uSkyScale;   // sky_scale
+uniform float uSkyOffset;  // offset
+
+out vec2 vTex;
+
+void main()
+{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+
+    // aPos.xy は [-ssize, ssize] の範囲
+    //   vTex = aPos.xy * sky_scale + offset
+    vTex = aPos.xy * uSkyScale + vec2(uSkyOffset);
+}
+)GLSL";
+
+        static const char *sky_fs_src = R"GLSL(
+#version 330 core
+
+in vec2 vTex;
+
+uniform sampler2D uTex;
+uniform vec4      uColor;   // テクスチャを使わないときの空色
+uniform int       uUseTex;  // 1 = テクスチャ, 0 = 単色
+
+out vec4 FragColor;
+
+void main()
+{
+    vec4 color = uColor;
+
+    if (uUseTex != 0)
+    {
+        FragColor = texture(uTex, vTex);  // テクスチャそのまま
+    }
+    else
+    {
+        FragColor = uColor;
+    }
+}
+)GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, sky_vs_src);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, sky_fs_src);
+        if (!vs || !fs)
+            internalError("Failed to compile sky shaders");
+
+        programSky_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programSky_)
+            internalError("Failed to link sky shader program");
+
+        uSkyMVP_ = glGetUniformLocation(programSky_, "uMVP");
+        uSkyColor_ = glGetUniformLocation(programSky_, "uColor");
+        uSkyTex_ = glGetUniformLocation(programSky_, "uTex");
+        uSkyScale_ = glGetUniformLocation(programSky_, "uSkyScale");
+        uSkyOffset_ = glGetUniformLocation(programSky_, "uSkyOffset");
+        uSkyUseTex_ = glGetUniformLocation(programSky_, "uUseTex");
+    }
+
+    void DrawstuffApp::initSkyMesh()
+    {
+        if (vaoSky_ != 0)
+            return;
+
+        const float ssize = 1000.0f; // 元コードと同じ
+
+        glm::vec3 p0(-ssize, -ssize, 0.0f);
+        glm::vec3 p1(-ssize, ssize, 0.0f);
+        glm::vec3 p2(ssize, ssize, 0.0f);
+        glm::vec3 p3(ssize, -ssize, 0.0f);
+
+        glm::vec3 n(0.0f, 0.0f, -1.0f);          // 一応
+        glm::vec4 color(1.0f, 1.0f, 1.0f, 1.0f); // テクスチャ時は uColor=1 で塗る
+
+        std::array<VertexPNC, 6> verts = {
+            VertexPNC{p0, n, color},
+            VertexPNC{p1, n, color},
+            VertexPNC{p2, n, color},
+
+            VertexPNC{p0, n, color},
+            VertexPNC{p2, n, color},
+            VertexPNC{p3, n, color},
+        };
+
+        glGenVertexArrays(1, &vaoSky_);
+        glGenBuffers(1, &vboSky_);
+
+        glBindVertexArray(vaoSky_);
+        glBindBuffer(GL_ARRAY_BUFFER, vboSky_);
+        glBufferData(GL_ARRAY_BUFFER,
+                     sizeof(verts),
+                     verts.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location = 0) position
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
+
+        // layout(location = 1) normal（今回は使わないが統一しておく）
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
+
+        // layout(location = 2) color（今回は使わない）
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(
             2, 4, GL_FLOAT, GL_FALSE,
@@ -1147,45 +1279,66 @@ void main()
     void DrawstuffApp::drawSky(const float view_xyz[3])
     {
         glDisable(GL_LIGHTING);
-        if (use_textures)
-        {
-            glEnable(GL_TEXTURE_2D);
-            sky_texture->bind(0);
-        }
-        else
-        {
-            glDisable(GL_TEXTURE_2D);
-            glColor3f(0, 0.5, 1.0);
-        }
-
-        // make sure sky depth is as far back as possible
+        glDisable(GL_TEXTURE_2D); // core では意味無いが一応
         glShadeModel(GL_FLAT);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
+
+        initSkyProgram();
+        initSkyMesh();
+
+        // 元コードと同じ offset ロジック
+        static float offset = 0.0f;
+        offset += 0.002f;
+        if (offset > 1.0f)
+            offset -= 1.0f;
+
+        // モデル行列：
+        //   カメラ位置に合わせて xy をシフト、
+        //   z は view_xyz[2] + sky_height の高さに。
+        glm::mat4 model(1.0f);
+        model = glm::translate(
+            model,
+            glm::vec3(view_xyz[0],
+                      view_xyz[1],
+                      view_xyz[2] + sky_height));
+
+        glm::mat4 mvp = proj_ * view_ * model;
+
+        // 「最奥にだけ書く」ための depth range
         glDepthRange(1, 1);
 
-        const float ssize = 1000.0f;
-        static float offset = 0.0f;
+        glUseProgram(programSky_);
+        glBindVertexArray(vaoSky_);
 
-        float x = ssize * sky_scale;
-        float z = view_xyz[2] + sky_height;
+        glUniformMatrix4fv(uSkyMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
 
-        glBegin(GL_QUADS);
-        glNormal3f(0, 0, -1);
-        glTexCoord2f(-x + offset, -x + offset);
-        glVertex3f(-ssize + view_xyz[0], -ssize + view_xyz[1], z);
-        glTexCoord2f(-x + offset, x + offset);
-        glVertex3f(-ssize + view_xyz[0], ssize + view_xyz[1], z);
-        glTexCoord2f(x + offset, x + offset);
-        glVertex3f(ssize + view_xyz[0], ssize + view_xyz[1], z);
-        glTexCoord2f(x + offset, -x + offset);
-        glVertex3f(ssize + view_xyz[0], -ssize + view_xyz[1], z);
-        glEnd();
+        // 空色（テクスチャなしのとき用・あるいはテクスチャの色乗算）
+        glm::vec4 skyColor(0.0f, 0.5f, 1.0f, 1.0f);
+        glUniform4fv(uSkyColor_, 1, glm::value_ptr(skyColor));
 
-        offset = offset + 0.002f;
-        if (offset > 1)
-            offset -= 1;
+        glUniform1f(uSkyScale_, sky_scale);
+        glUniform1f(uSkyOffset_, offset);
 
+        if (use_textures && sky_texture)
+        {
+            glUniform1i(uSkyUseTex_, 1);    // テクスチャを使う
+            glActiveTexture(GL_TEXTURE0);
+            sky_texture->bind(0);     // 内部で glBindTexture(GL_TEXTURE_2D, ...) している前提
+            glUniform1i(uSkyTex_, 0); // sampler2D uTex にユニット 0 を対応付け
+        }
+        else
+        {
+            glUniform1i(uSkyUseTex_, 0); // テクスチャは使わない
+            glUniform1i(uSkyTex_, 0);    // sampler2D uTex にユニット 0 を対応付け
+        }
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glBindVertexArray(0);
+        glUseProgram(0);
+
+        // depth 状態を元に戻す
         glDepthFunc(GL_LESS);
         glDepthRange(0, 1);
     }
@@ -1211,10 +1364,15 @@ void main()
         glUniformMatrix4fv(uGroundMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
 
         glm::vec4 groundColor;
-        if (use_textures)
+        if (use_textures) {
             groundColor = glm::vec4(1.0f);
+            glUniform1i(uGroundUseTex_, 1); // テクスチャ有効
+        }
         else
+        {
             groundColor = glm::vec4(GROUND_R, GROUND_G, GROUND_B, 1.0f);
+            glUniform1i(uGroundUseTex_, 0); // テクスチャ無効
+        }
         glUniform4fv(uGroundColor_, 1, glm::value_ptr(groundColor));
 
         // 元のパラメータを uniform で渡す
