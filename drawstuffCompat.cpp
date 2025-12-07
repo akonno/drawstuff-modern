@@ -62,88 +62,91 @@ manage openGL state changes better
 #include <cstdio>
 #include "drawstuffCompat.hpp"
 
+namespace
+{
+    // 戻り値あり版
+    template <typename Func, typename R>
+    R with_app_or_default(Func &&func, R default_value)
+    {
+        ds_internal::DrawstuffApp &app = ds_internal::DrawstuffApp::instance();
+        if (!app.isInsideSimulationLoop())
+        {
+            dsError("drawing function called outside simulation loop");
+            return default_value;
+        }
+        return func(app);
+    }
 
-// textures and shadows
-static int use_textures = 1; // 1 if textures to be drawn
-static int use_shadows = 1;  // 1 if shadows to be drawn
-
-#if !defined(macintosh) || defined(ODE_PLATFORM_OSX)
+    // 戻り値なし版
+    template <typename Func>
+    void with_app(Func &&func)
+    {
+        ds_internal::DrawstuffApp &app = ds_internal::DrawstuffApp::instance();
+        if (!app.isInsideSimulationLoop())
+        {
+            dsError("drawing function called outside simulation loop");
+            return;
+        }
+        func(app);
+    }
+} // anonymous namespace
 
 void dsStartGraphics(const int width, const int height, const dsFunctions *fn)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.startGraphics(width, height, fn);
+    with_app(
+        [width, height, fn](ds_internal::DrawstuffApp &app)
+        {
+            app.startGraphics(width, height, fn);
+        });
 }
-
-#else // macintosh
-
-void dsStartGraphics(int width, int height, dsFunctions *fn)
-{
-
-    // All examples build into the same dir
-    char *prefix = "::::drawstuff:textures";
-    char *s = (char *)alloca(strlen(prefix) + 20);
-
-    strcpy(s, prefix);
-    strcat(s, ":sky.ppm");
-    sky_texture = new Texture(s);
-
-    strcpy(s, prefix);
-    strcat(s, ":ground.ppm");
-    ground_texture = new Texture(s);
-
-    strcpy(s, prefix);
-    strcat(s, ":wood.ppm");
-    wood_texture = new Texture(s);
-}
-
-#endif
 
 void dsStopGraphics()
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.stopGraphics();
+    with_app(
+        [](ds_internal::DrawstuffApp &app)
+        {
+            app.stopGraphics();
+        });
 }
 
 void dsDrawFrame(const int width, const int height, const dsFunctions *fn, const int pause)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawFrame(width, height, fn, pause);
+    with_app(
+        [width, height, fn, pause](ds_internal::DrawstuffApp &app)
+        {
+            app.drawFrame(width, height, fn, pause);
+        });
 }
 
-int dsGetShadows()
+bool dsGetShadows()
 {
-    return use_shadows;
+    return with_app_or_default(
+        [](ds_internal::DrawstuffApp &app)
+        { return app.getUseShadows(); },
+        false // ループ外のときのデフォルト値
+    );
 }
 
-void dsSetShadows(int a)
+void dsSetShadows(const bool use_shadows_)
 {
-    use_shadows = (a != 0);
+    with_app(
+        [use_shadows_](ds_internal::DrawstuffApp &app)
+        { app.setUseShadows(use_shadows_); });
 }
 
-int dsGetTextures()
+bool dsGetTextures()
 {
-    return use_textures;
+    return with_app_or_default(
+        [](ds_internal::DrawstuffApp &app)
+        { return app.getUseTextures(); },
+        false // ループ外のときのデフォルト値
+    );
 }
-
-void dsSetTextures(int a)
+void dsSetTextures(const bool use_textures_)
 {
-    use_textures = (a != 0);
+    with_app(
+        [use_textures_](ds_internal::DrawstuffApp &app)
+        { app.setUseTextures(use_textures_); });
 }
 
 //***************************************************************************
@@ -153,46 +156,40 @@ extern "C" void dsSimulationLoop(const int argc, const char *const argv[],
                                  const int window_width, const int window_height,
                                  const dsFunctions *fn)
 {
-    ds_internal::DrawstuffApp::instance()
-        .runSimulation(argc, argv, window_width, window_height, fn);
+    auto &app = ds_internal::DrawstuffApp::instance();
+    app.runSimulation(argc, argv, window_width, window_height, fn);
 }
 
 extern "C" void dsSetViewpoint(const float xyz[3], const float hpr[3])
 {
-    ds_internal::DrawstuffApp::instance()
-        .setViewpoint(xyz, hpr);
+    auto &app = ds_internal::DrawstuffApp::instance();
+    app.setViewpoint(xyz, hpr);
 }
 
 extern "C" void dsGetViewpoint(float xyz[3], float hpr[3])
 {
-    ds_internal::DrawstuffApp::instance()
-        .getViewpoint(xyz, hpr);
+    auto &app = ds_internal::DrawstuffApp::instance();
+    app.getViewpoint(xyz, hpr);
 }
 
 extern "C" void dsStop()
 {
-    ds_internal::DrawstuffApp::instance().stopSimulation();
+    with_app(
+        [](ds_internal::DrawstuffApp &app)
+        {
+            app.stopSimulation();
+        });
 }
 
 extern "C" void dsSetTexture(int texture_number)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setTexture(texture_number);
 }
 
 extern "C" void dsSetColor(const float red, const float green, const float blue)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.storeColor(red, green, blue, 1.0f);
 }
 
@@ -200,11 +197,6 @@ extern "C" void dsSetColorAlpha(const float red, const float green, const float 
                                 const float alpha)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.storeColor(red, green, blue, alpha);
 }
 
@@ -212,49 +204,41 @@ extern "C" void dsSetColorAlpha(const float red, const float green, const float 
 extern "C" void dsDrawBox(const float pos[3], const float R[12],
                           const float sides[3])
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawBox<float>(pos, R, sides);
+    with_app(
+        [pos, R, sides](ds_internal::DrawstuffApp &app)
+        {
+            app.drawBox<float>(pos, R, sides);
+        });
 }
 
 extern "C" void dsDrawBoxD(const double pos[3], const double R[12],
                            const double sides[3])
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawBox<double>(pos, R, sides);
+    with_app(
+        [pos, R, sides](ds_internal::DrawstuffApp &app)
+        {
+            app.drawBox<double>(pos, R, sides);
+        });
 }
 
 // ---------- Sphere ----------
 extern "C" void dsDrawSphere(const float pos[3], const float R[12],
                              const float radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawSphere<float>(pos, R, radius);
+    with_app(
+        [pos, R, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawSphere<float>(pos, R, radius);
+        });
 }
 
 void dsDrawSphereD(const double pos[3], const double R[12], const double radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawSphere<double>(pos, R, radius);
+    with_app(
+        [pos, R, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawSphere<double>(pos, R, radius);
+        });
 }
 
 // ---------- Convex ----------
@@ -263,13 +247,11 @@ extern "C" void dsDrawConvex(const float pos[3], const float R[12],
                              const float *_points, unsigned int _pointcount,
                              const unsigned int *_polygons)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawConvex<float>(pos, R, _planes, _planecount, _points, _pointcount, _polygons);
+    with_app(
+        [pos, R, _planes, _planecount, _points, _pointcount, _polygons](ds_internal::DrawstuffApp &app)
+        {
+            app.drawConvex<float>(pos, R, _planes, _planecount, _points, _pointcount, _polygons);
+        });
 }
 
 extern "C" void dsDrawConvexD(const double pos[3], const double R[12],
@@ -277,13 +259,11 @@ extern "C" void dsDrawConvexD(const double pos[3], const double R[12],
                               const double *_points, const unsigned int _pointcount,
                               const unsigned int *_polygons)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawConvex<double>(pos, R, _planes, _planecount, _points, _pointcount, _polygons);
+    with_app(
+        [pos, R, _planes, _planecount, _points, _pointcount, _polygons](ds_internal::DrawstuffApp &app)
+        {
+            app.drawConvex<double>(pos, R, _planes, _planecount, _points, _pointcount, _polygons);
+        });
 }
 
 // ---------- Triangle ----------
@@ -291,154 +271,119 @@ extern "C" void dsDrawTriangle(const float pos[3], const float R[12],
                                const float *v0, const float *v1,
                                const float *v2, const int solid)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawTriangle<float>(pos, R, v0, v1, v2, solid);
+    with_app(
+        [pos, R, v0, v1, v2, solid](ds_internal::DrawstuffApp &app)
+        {
+            app.drawTriangle<float>(pos, R, v0, v1, v2, solid);
+        });
 }
 
 extern "C" void dsDrawTriangleD(const double pos[3], const double R[12],
                      const double *v0, const double *v1,
                      const double *v2, int solid)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawTriangle<double>(pos, R, v0, v1, v2, solid);
+    with_app(
+        [pos, R, v0, v1, v2, solid](ds_internal::DrawstuffApp &app)
+        {
+            app.drawTriangle<double>(pos, R, v0, v1, v2, solid);
+        });
 }
 
 extern "C" void dsDrawTriangles(const float pos[3], const float R[12],
                                 const float *v, const int n, const int solid)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawTriangles<float>(pos, R, v, n, solid);
+    with_app(
+        [pos, R, v, n, solid](ds_internal::DrawstuffApp &app)
+        {
+            app.drawTriangles<float>(pos, R, v, n, solid);
+        });
 }
 
 extern "C" void dsDrawTrianglesD(const double pos[3], const double R[12],
                                  const double *v, int n, int solid)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawTriangles<double>(pos, R, v, n, solid);
+    with_app(
+        [pos, R, v, n, solid](ds_internal::DrawstuffApp &app)
+        {
+            app.drawTriangles<double>(pos, R, v, n, solid);
+        });
 }
 
 // ---------- Cylinder / Capsule ----------
 extern "C" void dsDrawCylinder(const float pos[3], const float R[12],
                                const float length, const float radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawCylinder<float>(pos, R, length, radius);
+    with_app(
+        [pos, R, length, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawCylinder<float>(pos, R, length, radius);
+        });
 }
 
 extern "C" void dsDrawCylinderD(const double pos[3], const double R[12],
                      const double length, const double radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawCylinder<double>(pos, R, length, radius);
+    with_app(
+        [pos, R, length, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawCylinder<double>(pos, R, length, radius);
+        });
 }
 
 extern "C" void dsDrawCapsule(const float pos[3], const float R[12],
                               const float length, const float radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawCapsule<float>(pos, R, length, radius);
+    with_app(
+        [pos, R, length, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawCapsule<float>(pos, R, length, radius);
+        });
 }
 
 extern "C" void dsDrawCapsuleD(const double pos[3], const double R[12],
                                 const double length, const double radius)
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawCapsule<double>(pos, R, length, radius);
+    with_app(
+        [pos, R, length, radius](ds_internal::DrawstuffApp &app)
+        {
+            app.drawCapsule<double>(pos, R, length, radius);
+        });
 }
 
 // ---------- Line ----------
 extern "C" void dsDrawLine(const float pos1[3], const float pos2[3])
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawLine<float>(pos1, pos2);
+    with_app(
+        [pos1, pos2](ds_internal::DrawstuffApp &app)
+        {
+            app.drawLine<float>(pos1, pos2);
+        });
 }
 
 extern "C" void dsDrawLineD(const double _pos1[3], const double _pos2[3])
 {
-    auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.drawLine<double>(_pos1, _pos2);
+    with_app(
+        [_pos1, _pos2](ds_internal::DrawstuffApp &app)
+        {
+            app.drawLine<double>(_pos1, _pos2);
+        });
 }
 
 void dsSetSphereQuality(const int n)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setSphereQuality(n);
 }
 
 void dsSetCapsuleQuality(const int n)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setCapsuleQuality(n);
 }
 
 void dsSetDrawMode(const int mode)
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setDrawMode(mode);
 }
 
@@ -460,7 +405,7 @@ extern "C" void dsError(const char *msg, ...)
     va_start(ap, msg);
     printMessage("Error", msg, ap);
     va_end(ap);
-    exit(1);
+    exit(EXIT_FAILURE);
 }
 
 extern "C" void dsDebug(const char *msg, ...)
@@ -476,43 +421,23 @@ extern "C" void dsDebug(const char *msg, ...)
 extern "C" void dsStartCaptureFrames()
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setWriteFrames(true);
 }
 
 extern "C" void dsStopCaptureFrames()
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.setWriteFrames(false);
 }
 
 extern "C" void dsFlipCaptureFrames()
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
     app.toggleWriteFrames();
 }
 
 extern "C" void dsPause()
 {
     auto &app = ds_internal::DrawstuffApp::instance();
-    if (!app.isInsideSimulationLoop())
-    {
-        dsError("drawing function called outside simulation loop");
-        return;
-    }
-    app.setPauseMode(true);
+    app.togglePauseMode();
 }

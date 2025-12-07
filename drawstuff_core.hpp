@@ -116,6 +116,7 @@ namespace ds_internal
 
         void drawFrame(const int width, const int height, const dsFunctions *fn, const int pause);
 
+        // setters/getters
         // 球などの表示品質設定
         void setSphereQuality(const int n) { sphere_quality = n; }
         void setCapsuleQuality(const int n) { capsule_quality = n; }
@@ -125,7 +126,13 @@ namespace ds_internal
         void toggleWriteFrames() { writeframes = !writeframes; }
         void setPauseMode(bool pm) { pausemode = pm; }
         void togglePauseMode() { pausemode = !pausemode; }
+        // shadow and texture mode setup
+        bool getUseTextures() const { return use_textures; }
+        void setUseTextures(const bool ut) { use_textures = ut; }
+        bool getUseShadows() const { return use_shadows; }
+        void setUseShadows(const bool us) { use_shadows = us; }
 
+        
 
         // 状態チェック用
         bool isInsideSimulationLoop() const { return current_state == SIM_STATE_RUNNING || current_state == SIM_STATE_DRAWING; }

@@ -185,28 +185,28 @@ extern "C"
      * @ingroup drawstuff
      * @return 1 if drawing of shadows is enabled, 0 otherwise.
      */
-    DS_API int dsGetShadows(void);
+    DS_API bool dsGetShadows(void);
 
     /**
      * @brief Toggle the rendering of shadows.
      * @ingroup drawstuff
      * @param a 1 to enable shadows, 0 to disable.
      */
-    DS_API void dsSetShadows(const int a);
+    DS_API void dsSetShadows(const bool use_shadows_);
 
     /**
      * @brief Get current texture usage state.
      * @ingroup drawstuff
      * @return 1 if textures are enabled, 0 otherwise.
      */
-    DS_API int dsGetTextures(void);
+    DS_API bool dsGetTextures(void);
 
     /**
      * @brief Toggle the rendering of textures.
      * @ingroup drawstuff
      * @param a 1 to enable textures, 0 to disable.
      */
-    DS_API void dsSetTextures(const int a);
+    DS_API void dsSetTextures(const bool use_textures_);
 
     /**
      * @brief Set the texture for subsequent drawing.
