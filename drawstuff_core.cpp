@@ -30,6 +30,8 @@
 #include <windows.h>
 #endif
 
+#include <iostream>
+#include <string>
 #include <thread>
 #include <chrono>
 
@@ -56,9 +58,69 @@
 // 必要に応じて <GL/gl.h> など既存の include も
 
 const char *DEFAULT_PATH_TO_TEXTURES = "../textures/";
+// drawstuff_core.cpp
+
+#include <glad/glad.h>
+#include <glm/gtc/type_ptr.hpp>
+
+namespace
+{
+
+    GLuint compileShader(GLenum type, const char *src)
+    {
+        GLuint shader = glCreateShader(type);
+        glShaderSource(shader, 1, &src, nullptr);
+        glCompileShader(shader);
+
+        GLint ok = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok)
+        {
+            GLint logLen = 0;
+            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
+            std::string log(logLen, '\0');
+            glGetShaderInfoLog(shader, logLen, nullptr, log.data());
+            fprintf(stderr, "Shader compile error:\n%s\n", log.c_str());
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    }
+
+    GLuint linkProgram(GLuint vs, GLuint fs)
+    {
+        GLuint prog = glCreateProgram();
+        glAttachShader(prog, vs);
+        glAttachShader(prog, fs);
+        glLinkProgram(prog);
+
+        GLint ok = GL_FALSE;
+        glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+        if (!ok)
+        {
+            GLint logLen = 0;
+            glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &logLen);
+            std::string log(logLen, '\0');
+            glGetProgramInfoLog(prog, logLen, nullptr, log.data());
+            fprintf(stderr, "Program link error:\n%s\n", log.c_str());
+            glDeleteProgram(prog);
+            return 0;
+        }
+        return prog;
+    }
+
+} // namespace
 
 namespace ds_internal
 {
+    // 頂点構造体の例（好きな場所に定義）
+    struct VertexPNC
+    {
+        glm::vec3 pos;
+        glm::vec3 normal;
+        glm::vec4 color;
+    };
+
     // Report error and exit
     void fatalError(const char *msg, ...)
     {
@@ -82,7 +144,7 @@ namespace ds_internal
     }
 
     // skip over whitespace and comments in a stream.
-    void skipWhiteSpace(char *filename, FILE *f)
+    void skipWhiteSpace(const char *filename, FILE *f)
     {
         int c, d;
         for (;;)
@@ -113,7 +175,7 @@ namespace ds_internal
 
     // read a number from a stream, this return 0 if there is none (that's okay
     // because 0 is a bad value for all PPM numbers anyway).
-    int readNumber(char *filename, FILE *f)
+    int readNumber(const char *filename, FILE *f)
     {
         int c, n = 0;
         for (;;)
@@ -138,7 +200,7 @@ namespace ds_internal
         byte *image_data;
 
     public:
-        Image(char *filename)
+        Image(const char *filename)
         {
             FILE *f = fopen(filename, "rb");
             if (!f)
@@ -202,7 +264,7 @@ namespace ds_internal
         GLuint name;
 
     public:
-        Texture(char *filename)
+        Texture(const char *filename)
         {
             image = new Image(filename);
             glGenTextures(1, &name);
@@ -223,7 +285,6 @@ namespace ds_internal
             // set texture parameters - will these also be bound to the texture???
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                             GL_LINEAR_MIPMAP_LINEAR);
@@ -243,7 +304,8 @@ namespace ds_internal
         }
     };
 
-    std::array<Texture *, 4 + 1> texture; // +1 since index 0 is not used
+    constexpr int DS_NUMTEXTURES = 4; // number of standard textures
+    std::array<std::unique_ptr<Texture>, DS_NUMTEXTURES + 1> texture;
     Texture *sky_texture = nullptr;
     Texture *ground_texture = nullptr;
     Texture *wood_texture = nullptr;
@@ -278,6 +340,204 @@ namespace ds_internal
     {
         view_xyz = {{2.0f, 0.0f, 1.0f}};
         view_hpr = {{180.0f, 0.0f, 0.0f}};
+    }
+
+    void DrawstuffApp::initBasicProgram()
+    {
+        // すでに作ってあれば何もしない
+        if (programBasic_ != 0)
+            return;
+
+        // ライティング付きシェーダ
+        static const char *vsSrc = R"GLSL(
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aNormal;
+
+        uniform mat4 uMVP;
+        uniform mat4 uModel;
+
+        out vec3 vNormal;
+
+        void main()
+        {
+            gl_Position = uMVP * vec4(aPos, 1.0);
+            vNormal = mat3(uModel) * aNormal;
+        }
+    )GLSL";
+
+        static const char *fsSrc = R"GLSL(
+        #version 330 core
+        in vec3 vNormal;
+
+        uniform vec4 uColor;
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            vec3 N = normalize(vNormal);
+            // 適当な平行光源
+            float diff = max(dot(N, normalize(vec3(0.2, 0.5, 1.0))), 0.0);
+            vec3 rgb = uColor.rgb * (0.3 + 0.7 * diff);
+            FragColor = vec4(rgb, uColor.a);
+        }
+    )GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc);
+        if (!vs || !fs)
+        {
+            internalError("Failed to compile basic shaders");
+        }
+
+        programBasic_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programBasic_)
+        {
+            internalError("Failed to link basic shader program");
+        }
+
+        
+
+        // uniform ロケーションを取得
+        uMVP_ = glGetUniformLocation(programBasic_, "uMVP");
+        uModel_ = glGetUniformLocation(programBasic_, "uModel");
+        uColor_ = glGetUniformLocation(programBasic_, "uColor");
+    }
+
+    void DrawstuffApp::initGroundProgram()
+    {
+        if (programGround_ != 0)
+            return;
+        static const char *ground_vs_src = R"GLSL(
+// ground_vs.glsl
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+uniform mat4 uMVP;
+uniform mat4 uModel;
+
+// ground_scale, ground_ofsx, ground_ofsy を uniform で渡す想定
+uniform float uGroundScale;
+uniform vec2  uGroundOffset;
+
+out vec3 vNormal;
+out vec2 vTex;
+
+void main()
+{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vNormal = mat3(uModel) * aNormal;
+
+    // 元の fixed-function の対応：
+    // u = x * ground_scale + ground_ofsx
+    // v = y * ground_scale + ground_ofsy
+    vTex = aPos.xy * uGroundScale + uGroundOffset;
+}
+)GLSL";
+
+        static const char *ground_fs_src = R"GLSL(
+        #version 330 core
+        in vec3 vNormal;
+        in vec2 vTex;
+
+        uniform sampler2D uTex;
+        uniform vec4 uColor;
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            // vec3 N = normalize(vNormal);
+            // 適当な平行光源
+            // float diff = max(dot(N, normalize(vec3(0.2, 0.5, 1.0))), 0.0);
+
+            vec4 texColor = texture(uTex, vTex);
+            // vec3 base = uColor.rgb * texColor.rgb;
+            // vec3 rgb = base * (0.3 + 0.7 * diff);
+            vec3 rgb = uColor.rgb * texColor.rgb;
+            FragColor = vec4(rgb, uColor.a * texColor.a);
+        }
+    )GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, ground_vs_src); // 上記 GLSL
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, ground_fs_src);
+        if (!vs || !fs)
+            internalError("Failed to compile ground shaders");
+
+        programGround_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programGround_)
+            internalError("Failed to link ground shader program");
+
+        uGroundMVP_ = glGetUniformLocation(programGround_, "uMVP");
+        uGroundModel_ = glGetUniformLocation(programGround_, "uModel");
+        uGroundColor_ = glGetUniformLocation(programGround_, "uColor");
+        uGroundTex_ = glGetUniformLocation(programGround_, "uTex");
+        uGroundScale_ = glGetUniformLocation(programGround_, "uGroundScale");
+        uGroundOffset_ = glGetUniformLocation(programGround_, "uGroundOffset");
+    }
+
+    void DrawstuffApp::initGroundMesh()
+    {
+        if (vaoGround_ != 0)
+            return; // すでに初期化済みなら何もしない
+
+        const float gsize = 100.0f;
+        const float offset = 0.0f; // 元コードの offset
+
+        // 平面 z = offset 上の四角形を 2 つの三角形に分割（6頂点）
+        glm::vec3 p0(-gsize, -gsize, offset);
+        glm::vec3 p1(gsize, -gsize, offset);
+        glm::vec3 p2(gsize, gsize, offset);
+        glm::vec3 p3(-gsize, gsize, offset);
+
+        glm::vec3 n(0.0f, 0.0f, 1.0f);
+        glm::vec4 color(GROUND_R, GROUND_G, GROUND_B, 1.0f);
+
+        std::array<VertexPNC, 6> verts = {
+            VertexPNC{p0, n, color},
+            VertexPNC{p1, n, color},
+            VertexPNC{p2, n, color},
+
+            VertexPNC{p0, n, color},
+            VertexPNC{p2, n, color},
+            VertexPNC{p3, n, color},
+        };
+
+        glGenVertexArrays(1, &vaoGround_);
+        glGenBuffers(1, &vboGround_);
+
+        glBindVertexArray(vaoGround_);
+        glBindBuffer(GL_ARRAY_BUFFER, vboGround_);
+        glBufferData(GL_ARRAY_BUFFER,
+                     sizeof(verts),
+                     verts.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location = 0) position
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
+
+        // layout(location = 1) normal
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
+
+        // layout(location = 2) color
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            2, 4, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
+
+        glBindVertexArray(0);
     }
 
     Display *display = nullptr;
@@ -933,94 +1193,205 @@ namespace ds_internal
     void DrawstuffApp::drawGround()
     {
         glDisable(GL_LIGHTING);
+        glDisable(GL_TEXTURE_2D); // core では意味ないが一応
         glShadeModel(GL_FLAT);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
-        // glDepthRange (1,1);
-
-        if (use_textures)
-        {
-            glEnable(GL_TEXTURE_2D);
-            ground_texture->bind(0);
-        }
-        else
-        {
-            glDisable(GL_TEXTURE_2D);
-            glColor3f(GROUND_R, GROUND_G, GROUND_B);
-        }
-
-        // ground fog seems to cause problems with TNT2 under windows
-        /*
-        GLfloat fogColor[4] = {0.5, 0.5, 0.5, 1};
-        glEnable (GL_FOG);
-        glFogi (GL_FOG_MODE, GL_EXP2);
-        glFogfv (GL_FOG_COLOR, fogColor);
-        glFogf (GL_FOG_DENSITY, 0.05f);
-        glHint (GL_FOG_HINT, GL_NICEST); // GL_DONT_CARE);
-        glFogf (GL_FOG_START, 1.0);
-        glFogf (GL_FOG_END, 5.0);
-        */
-
-        const float gsize = 100.0f;
-        const float offset = 0; // -0.001f; ... polygon offsetting doesn't work well
-
-        glBegin(GL_QUADS);
-        glNormal3f(0, 0, 1);
-        glTexCoord2f(-gsize * ground_scale + ground_ofsx,
-                     -gsize * ground_scale + ground_ofsy);
-        glVertex3f(-gsize, -gsize, offset);
-        glTexCoord2f(gsize * ground_scale + ground_ofsx,
-                     -gsize * ground_scale + ground_ofsy);
-        glVertex3f(gsize, -gsize, offset);
-        glTexCoord2f(gsize * ground_scale + ground_ofsx,
-                     gsize * ground_scale + ground_ofsy);
-        glVertex3f(gsize, gsize, offset);
-        glTexCoord2f(-gsize * ground_scale + ground_ofsx,
-                     gsize * ground_scale + ground_ofsy);
-        glVertex3f(-gsize, gsize, offset);
-        glEnd();
-
         glDisable(GL_FOG);
+
+        initGroundMesh();
+
+        glm::mat4 model(1.0f);
+        glm::mat4 mvp = proj_ * view_ * model;
+
+        glUseProgram(programGround_);
+        glBindVertexArray(vaoGround_);
+
+        glUniformMatrix4fv(uGroundModel_, 1, GL_FALSE, glm::value_ptr(model));
+        glUniformMatrix4fv(uGroundMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
+
+        glm::vec4 groundColor;
+        if (use_textures)
+            groundColor = glm::vec4(1.0f);
+        else
+            groundColor = glm::vec4(GROUND_R, GROUND_G, GROUND_B, 1.0f);
+        glUniform4fv(uGroundColor_, 1, glm::value_ptr(groundColor));
+
+        // 元のパラメータを uniform で渡す
+        glUniform1f(uGroundScale_, ground_scale);
+        glUniform2f(uGroundOffset_, ground_ofsx, ground_ofsy);
+
+        // テクスチャをユニット0に bind
+        glActiveTexture(GL_TEXTURE0);
+        ground_texture->bind(0); // 内部で glBindTexture(GL_TEXTURE_2D, ...) している想定
+        glUniform1i(uGroundTex_, 0);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glBindVertexArray(0);
+        glUseProgram(0);
     }
 
     void DrawstuffApp::drawPyramidGrid()
     {
-        // setup stuff
-        glEnable(GL_LIGHTING);
-        glDisable(GL_TEXTURE_2D);
-        glShadeModel(GL_FLAT);
+        // まずは従来通りのステートセット（必要に応じて整理）
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
 
-        // draw the pyramid grid
-        for (int i = -1; i <= 1; i++)
+        if (/* backend_ == GLBackend::Legacy */ false)
         {
-            for (int j = -1; j <= 1; j++)
+            // ---- 旧実装：そのまま残しておく ----
+            glEnable(GL_LIGHTING);
+            glDisable(GL_TEXTURE_2D);
+            glShadeModel(GL_FLAT);
+
+            for (int i = -1; i <= 1; i++)
             {
-                glPushMatrix();
-                glTranslatef((float)i, (float)j, (float)0);
+                for (int j = -1; j <= 1; j++)
+                {
+                    glPushMatrix();
+                    glTranslatef((float)i, (float)j, (float)0);
+                    if (i == 1 && j == 0)
+                        setColor(1, 0, 0, 1);
+                    else if (i == 0 && j == 1)
+                        setColor(0, 0, 1, 1);
+                    else
+                        setColor(1, 1, 0, 1);
+                    const float k = 0.03f;
+                    glBegin(GL_TRIANGLE_FAN);
+                    glNormal3f(0, -1, 1);
+                    glVertex3f(0, 0, k);
+                    glVertex3f(-k, -k, 0);
+                    glVertex3f(k, -k, 0);
+                    glNormal3f(1, 0, 1);
+                    glVertex3f(k, k, 0);
+                    glNormal3f(0, 1, 1);
+                    glVertex3f(-k, k, 0);
+                    glNormal3f(-1, 0, 1);
+                    glVertex3f(-k, -k, 0);
+                    glEnd();
+                    glPopMatrix();
+                }
+            }
+            return;
+        }
+
+        // ---- ここから Core33 用実装 ----
+        // 固定機能のライトは core では使えないので、シェーダ側でライティングする想定
+        glDisable(GL_LIGHTING);
+        glDisable(GL_TEXTURE_2D);
+        glShadeModel(GL_FLAT); // 互換プロファイル用。core では意味なし。
+
+        static GLuint vao = 0;
+        static GLuint vbo = 0;
+
+        if (vao == 0)
+        {
+            // 1. まず「単位ピラミッド」のメッシュを一度だけ作る（k = 1 とする）
+            constexpr float k = 1.0f;
+            const glm::vec3 top(0.0f, 0.0f, k);
+            const glm::vec3 p1(-k, -k, 0.0f);
+            const glm::vec3 p2(k, -k, 0.0f);
+            const glm::vec3 p3(k, k, 0.0f);
+            const glm::vec3 p4(-k, k, 0.0f);
+
+            // 法線は元コードに合わせて「面ごとに一定」。正規化しておく。
+            auto n01 = glm::normalize(glm::vec3(0.0f, -1.0f, 1.0f));
+            auto n12 = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
+            auto n23 = glm::normalize(glm::vec3(0.0f, 1.0f, 1.0f));
+            auto n30 = glm::normalize(glm::vec3(-1.0f, 0.0f, 1.0f));
+
+            // TRIANGLE_FAN ではなく、4枚の三角形として展開する（頂点12個）
+            std::array<VertexPNC, 12> verts;
+
+            // face 0: top, p1, p2
+            verts[0] = {top, n01, glm::vec4(1.0f)};
+            verts[1] = {p1, n01, glm::vec4(1.0f)};
+            verts[2] = {p2, n01, glm::vec4(1.0f)};
+            // face 1: top, p2, p3
+            verts[3] = {top, n12, glm::vec4(1.0f)};
+            verts[4] = {p2, n12, glm::vec4(1.0f)};
+            verts[5] = {p3, n12, glm::vec4(1.0f)};
+            // face 2: top, p3, p4
+            verts[6] = {top, n23, glm::vec4(1.0f)};
+            verts[7] = {p3, n23, glm::vec4(1.0f)};
+            verts[8] = {p4, n23, glm::vec4(1.0f)};
+            // face 3: top, p4, p1
+            verts[9] = {top, n30, glm::vec4(1.0f)};
+            verts[10] = {p4, n30, glm::vec4(1.0f)};
+            verts[11] = {p1, n30, glm::vec4(1.0f)};
+
+            // 2. VAO/VBO 初期化
+            glGenVertexArrays(1, &vao);
+            glGenBuffers(1, &vbo);
+
+            glBindVertexArray(vao);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER,
+                         sizeof(verts),
+                         verts.data(),
+                         GL_STATIC_DRAW);
+
+            // layout(location = 0) position
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(
+                0, 3, GL_FLOAT, GL_FALSE,
+                sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
+
+            // layout(location = 1) normal
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(
+                1, 3, GL_FLOAT, GL_FALSE,
+                sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
+
+            // layout(location = 2) color
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(
+                2, 4, GL_FLOAT, GL_FALSE,
+                sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
+
+            glBindVertexArray(0);
+        }
+
+        // 3. 描画ループ：各グリッド位置にインスタンス配置
+        glUseProgram(programBasic_);
+        glBindVertexArray(vao);
+
+        const float kScale = 0.03f; // 元コードの「k」に相当
+
+        for (int i = -1; i <= 1; ++i)
+        {
+            for (int j = -1; j <= 1; ++j)
+            {
+
+                // 色を決める（元コードと同じルール）
+                glm::vec4 color;
                 if (i == 1 && j == 0)
-                    setColor(1, 0, 0, 1);
+                    color = glm::vec4(1, 0, 0, 1);
                 else if (i == 0 && j == 1)
-                    setColor(0, 0, 1, 1);
+                    color = glm::vec4(0, 0, 1, 1);
                 else
-                    setColor(1, 1, 0, 1);
-                const float k = 0.03f;
-                glBegin(GL_TRIANGLE_FAN);
-                glNormal3f(0, -1, 1);
-                glVertex3f(0, 0, k);
-                glVertex3f(-k, -k, 0);
-                glVertex3f(k, -k, 0);
-                glNormal3f(1, 0, 1);
-                glVertex3f(k, k, 0);
-                glNormal3f(0, 1, 1);
-                glVertex3f(-k, k, 0);
-                glNormal3f(-1, 0, 1);
-                glVertex3f(-k, -k, 0);
-                glEnd();
-                glPopMatrix();
+                    color = glm::vec4(1, 1, 0, 1);
+
+                // モデル行列：平行移動 + スケーリング
+                glm::mat4 model(1.0f);
+                model = glm::translate(model, glm::vec3((float)i, (float)j, 0.0f));
+                model = glm::scale(model, glm::vec3(kScale));
+
+                glm::mat4 mvp = proj_ * view_ * model;
+
+                // uniform をシェーダに送る
+                glUniformMatrix4fv(uModel_, 1, GL_FALSE, glm::value_ptr(model));
+                glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
+                glUniform4fv(uColor_, 1, glm::value_ptr(color));
+
+                // 描画（4面×3頂点 = 12頂点）
+                glDrawArrays(GL_TRIANGLES, 0, 12);
             }
         }
+
+        glBindVertexArray(0);
+        glUseProgram(0);
     }
 
     void DrawstuffApp::drawUnitSphere()
@@ -1090,40 +1461,48 @@ namespace ds_internal
             prefix = fn->path_to_textures;
         char *s = (char *)alloca(strlen(prefix) + 20);
 
-        strcpy(s, prefix);
-        strcat(s, "/sky.ppm");
-        texture[DS_SKY] = sky_texture = new Texture(s);
+        // GL 初期化
+        gladLoadGL();
 
-        strcpy(s, prefix);
-        strcat(s, "/ground.ppm");
-        texture[DS_GROUND] = ground_texture = new Texture(s);
+        initBasicProgram();
 
-        strcpy(s, prefix);
-        strcat(s, "/wood.ppm");
-        texture[DS_WOOD] = wood_texture = new Texture(s);
+        // ground メッシュがまだなら初期化
+        initGroundProgram();
+        initGroundMesh();
 
-        strcpy(s, prefix);
-        strcat(s, "/checkered.ppm");
-        texture[DS_CHECKERED] = checkered_texture = new Texture(s);
+        std::string skypath = std::string(prefix) + "/sky.ppm";
+        texture[DS_SKY] = std::make_unique<Texture>(skypath.c_str());
+        sky_texture = texture[DS_SKY].get();
+        
+        std::string groundpath = std::string(prefix) + "/ground.ppm";
+        texture[DS_GROUND] = std::make_unique<Texture>(groundpath.c_str());
+        ground_texture = texture[DS_GROUND].get();
+
+        std::string woodpath = std::string(prefix) + "/wood.ppm";
+        texture[DS_WOOD] = std::make_unique<Texture>(woodpath.c_str());
+        wood_texture = texture[DS_WOOD].get();
+
+        std::string checkeredpath = std::string(prefix) + "/checkered.ppm";
+        texture[DS_CHECKERED] = std::make_unique<Texture>(checkeredpath.c_str());
+        checkered_texture = texture[DS_CHECKERED].get();
     }
 
     void DrawstuffApp::stopGraphics()
     {
-        delete sky_texture;
-        delete ground_texture;
-        delete wood_texture;
-        sky_texture = 0;
-        ground_texture = 0;
-        wood_texture = 0;
+        for (int i = 0; i < DS_NUMTEXTURES; i++)
+        {
+            texture[i].reset();
+        }
     }
 
-    void DrawstuffApp::drawFrame(const int width, const int height, const dsFunctions *fn, const int pause)
+    void DrawstuffApp::drawFrame(const int width, const int height,
+                                 const dsFunctions *fn, const int pause)
     {
         if (current_state == SIM_STATE_NOT_STARTED)
             internalError("internal error");
         current_state = SIM_STATE_DRAWING;
 
-        // setup stuff
+        // ---- GL の基本状態設定（ここはとりあえずそのまま） ----
         glEnable(GL_LIGHTING);
         glEnable(GL_LIGHT0);
         glDisable(GL_TEXTURE_2D);
@@ -1136,64 +1515,79 @@ namespace ds_internal
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);
 
-        // setup viewport
+        // ---- ビューポート ----
         glViewport(0, 0, width, height);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
+
+        // ---- 投影行列: glFrustum → glm::frustum ----
         const float vnear = 0.1f;
         const float vfar = 100.0f;
-        const float k = 0.8f; // view scale, 1 = +/- 45 degrees
+        const float k = 0.8f; // 1=±45°
+
+        float left, right, bottom, top;
         if (width >= height)
         {
-            float k2 = float(height) / float(width);
-            glFrustum(-vnear * k, vnear * k, -vnear * k * k2, vnear * k * k2, vnear, vfar);
+            const float k2 = (height > 0) ? float(height) / float(width) : 1.0f;
+            left = -vnear * k;
+            right = vnear * k;
+            bottom = -vnear * k * k2;
+            top = vnear * k * k2;
         }
         else
         {
-            float k2 = float(width) / float(height);
-            glFrustum(-vnear * k * k2, vnear * k * k2, -vnear * k, vnear * k, vnear, vfar);
+            const float k2 = (height > 0) ? float(width) / float(height) : 1.0f;
+            left = -vnear * k * k2;
+            right = vnear * k * k2;
+            bottom = -vnear * k;
+            top = vnear * k;
         }
 
-        // setup lights. it makes a difference whether this is done in the
-        // GL_PROJECTION matrix mode (lights are scene relative) or the
-        // GL_MODELVIEW matrix mode (lights are camera relative, bad!).
-        static GLfloat light_ambient[] = {0.5, 0.5, 0.5, 1.0};
-        static GLfloat light_diffuse[] = {1.0, 1.0, 1.0, 1.0};
-        static GLfloat light_specular[] = {1.0, 1.0, 1.0, 1.0};
+        // GLM で投影行列を生成し、メンバに保持
+        proj_ = glm::frustum(left, right, bottom, top, vnear, vfar);
+
+        // まだ固定機能を使っているあいだは、互換のために glLoadMatrixf する
+        glMatrixMode(GL_PROJECTION);
+        glLoadMatrixf(glm::value_ptr(proj_));
+
+        // ---- ライト設定（従来どおり PROJECTION モードで） ----
+        static GLfloat light_ambient[] = {0.5f, 0.5f, 0.5f, 1.0f};
+        static GLfloat light_diffuse[] = {1.0f, 1.0f, 1.0f, 1.0f};
+        static GLfloat light_specular[] = {1.0f, 1.0f, 1.0f, 1.0f};
         glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient);
         glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
         glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
-        glColor3f(1.0, 1.0, 1.0);
+        glColor3f(1.0f, 1.0f, 1.0f);
 
-        // clear the window
-        glClearColor(0.5, 0.5, 0.5, 0);
+        // ---- 画面クリア ----
+        glClearColor(0.5f, 0.5f, 0.5f, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // snapshot camera position (in MS Windows it is changed by the GUI thread)
+        // ---- カメラパラメータのスナップショット ----
         float view2_xyz[3];
         float view2_hpr[3];
-
         memcpy(view2_xyz, view_xyz.data(), sizeof(float) * 3);
         memcpy(view2_hpr, view_hpr.data(), sizeof(float) * 3);
 
-        // go to GL_MODELVIEW matrix mode and set the camera
+        // ---- MODELVIEW & カメラ設定 ----
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         setCamera(view2_xyz[0], view2_xyz[1], view2_xyz[2],
                   view2_hpr[0], view2_hpr[1], view2_hpr[2]);
 
-        // set the light position (for some reason we have to do this in model view.
-        static GLfloat light_position[] = {LIGHTX, LIGHTY, 1.0, 0.0};
+        // ここで setCamera 側も GLM で view_ を更新しておくと、
+        // Core Profile 移行が楽になります（前メッセージの案）。
+
+        // ---- ライト位置（従来どおり MODELVIEW で）----
+        static GLfloat light_position[] = {LIGHTX, LIGHTY, 1.0f, 0.0f};
         glLightfv(GL_LIGHT0, GL_POSITION, light_position);
 
-        // draw the background (ground, sky etc)
+        // ---- 背景（空・地面など）----
         drawSky(view2_xyz);
         drawGround();
 
-        // draw the little markers on the ground
+        // ---- 地面のマーカー ----
         drawPyramidGrid();
 
-        // leave openGL in a known state - flat shaded white, no textures
+        // ---- OpenGL 状態を整えてからユーザ描画へ ----
         glEnable(GL_LIGHTING);
         glDisable(GL_TEXTURE_2D);
         glShadeModel(GL_FLAT);
@@ -1202,12 +1596,12 @@ namespace ds_internal
         glColor3f(1, 1, 1);
         setColor(1, 1, 1, 1);
 
-        // draw the rest of the objects. set drawing state first.
         current_color[0] = 1;
         current_color[1] = 1;
         current_color[2] = 1;
         current_color[3] = 1;
         texture_id = 0;
+
         if (fn->step)
             fn->step(pause);
     }

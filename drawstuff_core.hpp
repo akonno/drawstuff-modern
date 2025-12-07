@@ -6,8 +6,15 @@
 #include <cmath>
 #include <X11/Xlib.h>  // XEvent など
 #include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
+#include <glad/glad.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp> // lookAt, perspective, rotate, translate
+#include <glm/gtc/type_ptr.hpp>         // value_ptr
+
+// お好みで（度→ラジアン強制）
+#define GLM_FORCE_RADIANS
 
 #undef Convex // X11 のヘッダと odesim のヘッダが競合するため
 
@@ -71,6 +78,12 @@ namespace ds_internal
         static constexpr auto multMatrix = &glMultMatrixd;
     };
 
+    enum class GLBackend
+    {
+        Legacy, // 今までどおり glBegin なども使える
+        Core33, // シェーダ + VAO/VBO + 自前行列 のみ
+    };
+
     // constants to convert degrees to radians and the reverse
     constexpr float RAD_TO_DEG = 180.0 / M_PI;
     constexpr float DEG_TO_RAD = M_PI / 180.0;
@@ -98,6 +111,7 @@ namespace ds_internal
     {
     public:
         static DrawstuffApp &instance();
+        GLBackend backend_ = GLBackend::Legacy; // 最初は既存どおり
 
         // C API から呼ばれる入り口
         int runSimulation(const int argc, const char *const argv[],
@@ -144,26 +158,37 @@ namespace ds_internal
             static_assert(
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
-            
-            glMatrixMode(GL_MODELVIEW);
-            glLoadIdentity();
-            if constexpr (std::is_same<T, float>::value)
+
+            const float xf = static_cast<float>(x);
+            const float yf = static_cast<float>(y);
+            const float zf = static_cast<float>(z);
+            const float hf = static_cast<float>(h);
+            const float pf = static_cast<float>(p);
+            const float rf = static_cast<float>(r);
+
+            // いままでの glRotatef/Translatef の順序をそのまま GLM に移植
+            glm::mat4 view(1.0f);
+            view = glm::rotate(view, glm::radians(90.0f), glm::vec3(0, 0, 1));
+            view = glm::rotate(view, glm::radians(90.0f), glm::vec3(0, 1, 0));
+            view = glm::rotate(view, glm::radians(rf), glm::vec3(1, 0, 0));
+            view = glm::rotate(view, glm::radians(pf), glm::vec3(0, 1, 0));
+            view = glm::rotate(view, glm::radians(-hf), glm::vec3(0, 0, 1));
+            view = glm::translate(view, glm::vec3(-xf, -yf, -zf));
+
+            view_ = view;
+
+            cam_x_ = xf;
+            cam_y_ = yf;
+            cam_z_ = zf;
+            cam_h_ = hf;
+            cam_p_ = pf;
+            cam_r_ = rf;
+
+            // 互換用に legacy パスを残すなら：
+            if (backend_ == GLBackend::Legacy)
             {
-                glRotatef(90, 0, 0, 1);
-                glRotatef(90, 0, 1, 0);
-                glRotatef(r, 1, 0, 0);
-                glRotatef(p, 0, 1, 0);
-                glRotatef(-h, 0, 0, 1);
-                glTranslatef(-x, -y, -z);
-            }
-            else
-            {
-                glRotated(90, 0, 0, 1);
-                glRotated(90, 0, 1, 0);
-                glRotated(r, 1, 0, 0);
-                glRotated(p, 0, 1, 0);
-                glRotated(-h, 0, 0, 1);
-                glTranslated(-x, -y, -z);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadMatrixf(glm::value_ptr(view_));
             }
         }
         template <typename T>
@@ -393,6 +418,43 @@ namespace ds_internal
 
         DrawstuffApp(const DrawstuffApp &) = delete;
         DrawstuffApp &operator=(const DrawstuffApp &) = delete;
+
+        // matrices
+        // カメラ・投影
+        glm::mat4 view_{1.0f};
+        glm::mat4 proj_{1.0f};
+        
+        // 基本シェーダプログラム
+        GLuint programBasic_ = 0;
+        // uniform location
+        GLint uMVP_ = -1;
+        GLint uModel_ = -1;
+        GLint uColor_ = -1;
+
+        // ピラミッド用 VAO/VBO
+        GLuint vaoPyramid_ = 0;
+        GLuint vboPyramid_ = 0;
+
+        // 初期化ヘルパ
+        void initBasicProgram();
+
+        // ground 用 VAO/VBO
+        GLuint vaoGround_ = 0;
+        GLuint vboGround_ = 0;
+        GLuint programGround_ = 0;
+        GLint uGroundMVP_ = -1;
+        GLint uGroundModel_ = -1;
+        GLint uGroundColor_ = -1;
+        GLint uGroundTex_ = -1;
+        GLint uGroundScale_ = -1;
+        GLint uGroundOffset_ = -1;
+
+        void initGroundProgram();
+        void initGroundMesh();
+
+        // 必要ならカメラパラメータも保存
+        float cam_x_ = 0.0f, cam_y_ = 0.0f, cam_z_ = 0.0f;
+        float cam_h_ = 0.0f, cam_p_ = 0.0f, cam_r_ = 0.0f;
 
         // 旧グローバル変数をメンバに移していく
         SimulationState current_state;
