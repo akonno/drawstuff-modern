@@ -142,7 +142,6 @@ namespace ds_internal
         // setters/getters
         // 球などの表示品質設定
         void setSphereQuality(const int n) { sphere_quality = n; }
-        void setCapsuleQuality(const int n) { capsule_quality = n; }
         void setCylinderQuality(const int n) { cylinder_quality = n; }
         void setDrawMode(const int mode) { draw_mode = mode; }
         void setWriteFrames(bool wf) { writeframes = wf; }
@@ -246,6 +245,49 @@ namespace ds_internal
             drawShadowMesh(meshSphere_[sphere_quality], model);
         }
 
+        //=====================================================================
+        // OpenGL 3.3 core 版 drawCapsule
+        //=====================================================================
+        template <typename T>
+        void drawCapsule(const T pos[3], const T R[12],
+                         const T length, const T radius)
+        {
+            if (current_state != SIM_STATE_DRAWING)
+                fatalError("drawing function called outside simulation loop");
+
+            setupDrawingMode();
+
+            float l = static_cast<float>(length);
+            float r = static_cast<float>(radius);
+
+            // 1) 半径スケール
+            glm::mat4 S = glm::scale(glm::mat4(1.0f), glm::vec3(r));
+
+            // 2) 平行部の不足分
+            float delta = 0.5f * (l - 2.0f * r);
+
+            glm::mat4 T_up = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, +delta));
+            glm::mat4 T_down = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -delta));
+
+            // 3) ODE の姿勢・位置
+            const T scaleXYZ[3] = { 1.0f, 1.0f, 1.0f }; // スケーリングは上でやる
+            glm::mat4 W = buildModelMatrix(pos, R, scaleXYZ);
+
+            // 4) 上半分・下半分を別々に描画
+            glm::mat4 M_up = W * T_up * S;
+            glm::mat4 M_down = W * T_down * S;
+
+            drawMeshBasic(meshCapsule_, M_up, current_color);
+            drawMeshBasic(meshCapsule_, M_down, current_color);
+
+            if (use_shadows)
+            {
+                drawShadowMesh(meshCapsule_, M_up);
+                drawShadowMesh(meshCapsule_, M_down);
+            }
+        }
+
+#if 0
         template <typename T>
         void drawCapsule(const T pos[3], const T R[12],
                          const T length, const T radius)
@@ -270,8 +312,8 @@ namespace ds_internal
                 glDepthRange(0, 1);
             }
         }
+#endif
 
-#if 1
         template <typename T>
         void drawCylinder(const T pos[3], const T R[12],
                         const T length, const T radius)
@@ -293,34 +335,6 @@ namespace ds_internal
             // 影（Core パス）
             drawShadowMesh(meshCylinder_[cylinder_quality], model);
         }
-#endif
-
-#if 0
-        template <typename T>
-        void drawCylinder(const T pos[3], const T R[12],
-                                        const T length, const T radius)
-        {
-            // 旧 dsDrawCylinder から OpenGL 呼び出し部分を移植
-            if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glShadeModel(GL_SMOOTH);
-            setTransform(pos, R);
-            drawCylinderCenteredX<T>(length, radius, 0);
-            glPopMatrix();
-
-            if (use_shadows)
-            {
-                setShadowDrawingMode();
-                setShadowTransform();
-                setTransform(pos, R);
-                drawCylinderCenteredX<T>(length, radius, 0);
-                glPopMatrix();
-                glPopMatrix();
-                glDepthRange(0, 1);
-            }
-        }
-#endif
 
         template <typename T>
         void drawTriangle(const T pos[3], const T R[12],
@@ -433,6 +447,7 @@ namespace ds_internal
         Mesh meshBox_;
         Mesh meshSphere_[4];
         Mesh meshCylinder_[4];
+        Mesh meshCapsule_; // カプセル用メッシュ
 
         // matrices
         // カメラ・投影
@@ -527,7 +542,6 @@ namespace ds_internal
         const dsFunctions *callbacks_ = nullptr;
 
         int sphere_quality = 3;
-        int capsule_quality = 3;
         int cylinder_quality = 3;
         int draw_mode = DS_POLYFILL;
         
@@ -759,6 +773,8 @@ namespace ds_internal
             }
             glEnd();
         }
+
+#if 0
         template <typename T>
         void drawCapsuleCenteredX(const T length, const T radius)
         {
@@ -881,6 +897,8 @@ namespace ds_internal
                 start_ny = start_ny2;
             }
         }
+#endif
+
         template <typename T>
         void drawCylinderCenteredX(const T length, const T radius, const T zoffset)
         {

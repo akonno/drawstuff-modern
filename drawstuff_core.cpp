@@ -1381,6 +1381,9 @@ void main()
 
     void DrawstuffApp::motion(const int mode, const int deltax, const int deltay)
     {
+        using std::sin;
+        using std::cos;
+
         float side = 0.01f * float(deltax);
         float fwd = (mode == 4) ? (0.01f * float(deltay)) : 0.0f;
         float s = (float)sin(view_hpr[0] * DEG_TO_RAD);
@@ -1875,6 +1878,293 @@ void main()
         glBindVertexArray(0);
     }
 
+    // 単位カプセル: 半径1, 平行部長さ2, 軸Z
+    // 元の drawCapsuleCenteredX と同じ分割ロジックでメッシュを作る
+    void buildUnitCapsuleMesh(Mesh &dstMesh)
+    {
+        using std::cos;
+        using std::sin;
+
+        std::vector<VertexPN> vertices;
+        std::vector<uint32_t> indices;
+
+        auto addVertex = [&](float x, float y, float z,
+                             float nx, float ny, float nz) -> uint32_t
+        {
+            VertexPN v;
+            v.pos = glm::vec3(x, y, z);
+            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
+            vertices.push_back(v);
+            return static_cast<uint32_t>(vertices.size() - 1);
+        };
+
+        // ========= パラメータ（元コードと対応） =========
+        constexpr int capsule_quality = 3; // 1〜3
+        const int n = capsule_quality * 12; // n は 4 の倍数
+        const float length = 2.0f;         // 平行部の長さ
+        const float radius = 1.0f;         // 半径
+
+        const float l = length * 0.5f; // cylinder は z = ±l
+        const float r = radius;
+
+        const float a = 2.0f * static_cast<float>(M_PI) / static_cast<float>(n);
+        const float sa = sin(a);
+        const float ca = cos(a);
+
+        // =================================================
+        // 1. 円筒本体: 元の「draw cylinder body」をメッシュ化
+        // =================================================
+
+        float ny = 1.0f;
+        float nz = 0.0f;
+        float tmp;
+
+        // 元コードは TRIANGLE_STRIP で [vTop, vBottom, vTop, vBottom, ...]
+        // という順に出力していたので、それをそのまま再現して
+        // ストリップ → 三角形に変換する。
+        bool firstPair = true;
+        uint32_t prevTop = 0, prevBottom = 0;
+
+        for (int i = 0; i <= n; ++i)
+        {
+            // 頂点座標・法線（drawCapsuleCenteredX と同じ）
+            float nx0 = ny;
+            float ny0 = nz;
+            float nz0 = 0.0f;
+
+            // 上側 (z = +l)
+            uint32_t vTop = addVertex(ny * r, nz * r, +l, nx0, ny0, nz0);
+            // 下側 (z = -l)
+            uint32_t vBottom = addVertex(ny * r, nz * r, -l, nx0, ny0, nz0);
+
+            if (!firstPair)
+            {
+                // TRIANGLE_STRIP の展開：
+                // 以前: (prevTop, prevBottom), 今回: (vTop, vBottom)
+                // v0 = prevTop, v1 = prevBottom, v2 = vTop, v3 = vBottom
+                // 三角形: (v0,v1,v2), (v1,v3,v2)
+                indices.push_back(prevTop);
+                indices.push_back(prevBottom);
+                indices.push_back(vTop);
+
+                indices.push_back(prevBottom);
+                indices.push_back(vBottom);
+                indices.push_back(vTop);
+            }
+            else
+            {
+                firstPair = false;
+            }
+
+            prevTop = vTop;
+            prevBottom = vBottom;
+
+            // rotate ny,nz
+            tmp = ca * ny - sa * nz;
+            nz = sa * ny + ca * nz;
+            ny = tmp;
+        }
+
+        // =================================================
+        // 2. 上部キャップ（first cylinder cap）
+        //    元コードのロジックをそのまま三角形に変換
+        // =================================================
+
+        float start_nx = 0.0f;
+        float start_ny = 1.0f;
+
+        for (int j = 0; j < (n / 4); ++j)
+        {
+            // get start_n2 = rotated start_n
+            float start_nx2 = ca * start_nx + sa * start_ny;
+            float start_ny2 = -sa * start_nx + ca * start_ny;
+
+            // n = start_n, n2 = start_n2
+            float nx = start_nx;
+            float nyc = start_ny; // "ny" がすでに cylinder で使っているので別名
+            float nzc = 0.0f;
+
+            float nx2 = start_nx2;
+            float ny2c = start_ny2;
+            float nz2c = 0.0f;
+
+            firstPair = true;
+            uint32_t prev0 = 0, prev1 = 0;
+
+            for (int i = 0; i <= n; ++i)
+            {
+                // 元コード:
+                // glNormal3f(ny2, nz2, nx2);
+                // glVertex3f(ny2 * r, nz2 * r, l + nx2 * r);
+                // glNormal3f(ny, nz, nx);
+                // glVertex3f(ny * r, nz * r, l + nx * r);
+
+                uint32_t v0 = addVertex(ny2c * r, nz2c * r, l + nx2 * r,
+                                        ny2c, nz2c, nx2);
+                uint32_t v1 = addVertex(nyc * r, nzc * r, l + nx * r,
+                                        nyc, nzc, nx);
+
+                if (!firstPair)
+                {
+                    // strip 展開: 以前: (prev0,prev1), 今回: (v0,v1)
+                    indices.push_back(prev0);
+                    indices.push_back(prev1);
+                    indices.push_back(v0);
+
+                    indices.push_back(prev1);
+                    indices.push_back(v1);
+                    indices.push_back(v0);
+                }
+                else
+                {
+                    firstPair = false;
+                }
+
+                prev0 = v0;
+                prev1 = v1;
+
+                // rotate n, n2（元コードのまま）
+                tmp = ca * nyc - sa * nzc;
+                nzc = sa * nyc + ca * nzc;
+                nyc = tmp;
+
+                tmp = ca * ny2c - sa * nz2c;
+                nz2c = sa * ny2c + ca * nz2c;
+                ny2c = tmp;
+            }
+
+            start_nx = start_nx2;
+            start_ny = start_ny2;
+        }
+
+        // =================================================
+        // 3. 下部キャップ（second cylinder cap）
+        //    こちらも元コードのロジックをそのまま三角形に変換
+        // =================================================
+
+        start_nx = 0.0f;
+        start_ny = 1.0f;
+
+        for (int j = 0; j < (n / 4); ++j)
+        {
+            // get start_n2 = rotated start_n
+            float start_nx2 = ca * start_nx - sa * start_ny;
+            float start_ny2 = sa * start_nx + ca * start_ny;
+
+            float nx = start_nx;
+            float nyc = start_ny;
+            float nzc = 0.0f;
+
+            float nx2 = start_nx2;
+            float ny2c = start_ny2;
+            float nz2c = 0.0f;
+
+            firstPair = true;
+            uint32_t prev0 = 0, prev1 = 0;
+
+            for (int i = 0; i <= n; ++i)
+            {
+                // 元コード:
+                // glNormal3d(ny,  nz,  nx );
+                // glVertex3d(ny  * r, nz  * r, -l + nx  * r);
+                // glNormal3d(ny2, nz2, nx2);
+                // glVertex3d(ny2 * r, nz2 * r, -l + nx2 * r);
+
+                uint32_t v0 = addVertex(nyc * r, nzc * r, -l + nx * r,
+                                        nyc, nzc, nx);
+                uint32_t v1 = addVertex(ny2c * r, nz2c * r, -l + nx2 * r,
+                                        ny2c, nz2c, nx2);
+
+                if (!firstPair)
+                {
+                    // strip 展開
+                    indices.push_back(prev0);
+                    indices.push_back(prev1);
+                    indices.push_back(v0);
+
+                    indices.push_back(prev1);
+                    indices.push_back(v1);
+                    indices.push_back(v0);
+                }
+                else
+                {
+                    firstPair = false;
+                }
+
+                prev0 = v0;
+                prev1 = v1;
+
+                // rotate n, n2
+                tmp = ca * nyc - sa * nzc;
+                nzc = sa * nyc + ca * nzc;
+                nyc = tmp;
+
+                tmp = ca * ny2c - sa * nz2c;
+                nz2c = sa * ny2c + ca * nz2c;
+                ny2c = tmp;
+            }
+
+            start_nx = start_nx2;
+            start_ny = start_ny2;
+        }
+
+        // =================================================
+        // 4. Mesh → VAO/VBO/EBO に転送
+        // =================================================
+
+        // 既存リソースの破棄
+        if (dstMesh.vao)
+        {
+            glDeleteVertexArrays(1, &dstMesh.vao);
+            dstMesh.vao = 0;
+        }
+        if (dstMesh.vbo)
+        {
+            glDeleteBuffers(1, &dstMesh.vbo);
+            dstMesh.vbo = 0;
+        }
+        if (dstMesh.ebo)
+        {
+            glDeleteBuffers(1, &dstMesh.ebo);
+            dstMesh.ebo = 0;
+        }
+
+        glGenVertexArrays(1, &dstMesh.vao);
+        glBindVertexArray(dstMesh.vao);
+
+        glGenBuffers(1, &dstMesh.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, dstMesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     vertices.size() * sizeof(VertexPN),
+                     vertices.data(),
+                     GL_STATIC_DRAW);
+
+        glGenBuffers(1, &dstMesh.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dstMesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location=0) vec3 aPos;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        // layout(location=1) vec3 aNormal;
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        dstMesh.indexCount = static_cast<GLsizei>(indices.size());
+
+        glBindVertexArray(0);
+    }
+
     void DrawstuffApp::createPrimitiveMeshes()
     {
         // 頂点配列: position + normal (+ texcoord)
@@ -1986,6 +2276,9 @@ void main()
         buildCylinderMeshForQuality(1, meshCylinder_[1]);
         buildCylinderMeshForQuality(2, meshCylinder_[2]);
         buildCylinderMeshForQuality(3, meshCylinder_[3]);
+
+        // --- ここから capsule 用メッシュ生成 ---
+        buildUnitCapsuleMesh(meshCapsule_);
     }
 
     void DrawstuffApp::drawSky(const float view_xyz[3])
