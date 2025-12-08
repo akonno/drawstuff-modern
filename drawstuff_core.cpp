@@ -395,17 +395,21 @@ layout(location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 
-out vec3 vNormal;
+out vec3 vLocalPos;
+out vec3 vLocalNormal;
 out vec3 vWorldPos;
+out vec3 vWorldNormal;
 
 void main()
 {
+    vLocalPos      = aPos;
+    vLocalNormal   = aNormal;
+
     vec4 worldPos4 = uModel * vec4(aPos, 1.0);
     vWorldPos      = worldPos4.xyz;
-
     // 非一様スケールがきつい場合は本当は逆転置行列が必要だが、
     // 今回は簡易版として mat3(uModel) を使用
-    vNormal = mat3(uModel) * aNormal;
+    vWorldNormal = mat3(uModel) * aNormal;
 
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
@@ -415,7 +419,9 @@ void main()
 // basic.fs
 #version 330 core
 
-in vec3 vNormal;
+in vec3 vLocalPos;
+in vec3 vLocalNormal;
+in vec3 vWorldNormal;
 in vec3 vWorldPos;
 
 uniform vec4      uColor;
@@ -429,23 +435,20 @@ out vec4 FragColor;
 
 void main()
 {
-    vec3 N = normalize(vNormal);
-
-    // 簡単なディフューズライティング
-    float diff = max(dot(N, uLightDir), 0.0);
+    vec3 N_tex = normalize(vLocalNormal);
 
     vec3 base = uColor.rgb;
 
     if (uUseTex) {
         // トライプラナー重み
-        vec3 an  = abs(N);
+        vec3 an  = abs(N_tex);
         float sum = an.x + an.y + an.z + 1e-5;
         vec3 w   = an / sum;
 
         // 各軸方向からの投影座標
-        vec2 uvX = vWorldPos.yz * uTexScale; // X向きの面 → YZ平面
-        vec2 uvY = vWorldPos.xz * uTexScale; // Y向きの面 → XZ平面
-        vec2 uvZ = vWorldPos.xy * uTexScale; // Z向きの面 → XY平面
+        vec2 uvX = vLocalPos.yz * uTexScale; // X向きの面 → YZ平面
+        vec2 uvY = vLocalPos.xz * uTexScale; // Y向きの面 → XZ平面
+        vec2 uvZ = vLocalPos.xy * uTexScale; // Z向きの面 → XY平面
 
         vec3 texX = texture(uTex, uvX).rgb;
         vec3 texY = texture(uTex, uvY).rgb;
@@ -456,8 +459,19 @@ void main()
         base *= texColor;
     }
 
+    // 簡単なディフューズライティング
+    vec3 L = normalize(uLightDir); // 光線方向（光源→頂点）
+    vec3 N_lit = normalize(vWorldNormal);
+
     // vec3 rgb = base * (0.3 + 0.7 * diff);
-    vec3 rgb = base * (0.2 + 0.4 * diff);
+    const float A = 1.0/3.0;  // 陰側
+    const float B = 2.0/3.0;  // 光源側とのコントラスト
+
+    float diff = max(dot(N_lit, L), 0.0);
+    float lightFactor = A + B * diff;  // 陰側 ≒0.33, 光側=1.0
+
+    vec3 rgb = base * lightFactor;
+
     FragColor = vec4(rgb, uColor.a);
 
     // FragColor = vec4(0.5 * N + 0.5, 1.0);  // デバッグ用：法線を色で可視化
@@ -496,7 +510,6 @@ void main()
         const glm::vec4 &color)
     {
         glm::mat4 shadowMvp = proj_ * view_ * model;
-        uLightDir_ = glGetUniformLocation(programBasic_, "uLightDir");
 
         glUseProgram(programBasic_);
         glUniform3f(uLightDir_, shadowLightDir_.x, shadowLightDir_.y, shadowLightDir_.z);
@@ -609,6 +622,7 @@ void main()
         uGroundOffset_ = glGetUniformLocation(programGround_, "uGroundOffset");
         uGroundUseTex_ = glGetUniformLocation(programGround_, "uUseTex");
         uShadowIntensity_ = glGetUniformLocation(programShadow_, "uShadowIntensity");
+        uLightDir_ = glGetUniformLocation(programBasic_, "uLightDir");
     }
 
     void DrawstuffApp::initGroundMesh()
@@ -1877,79 +1891,151 @@ void main()
 
         glBindVertexArray(0);
     }
+    static void createMeshFromVectors(
+        Mesh &dst,
+        const std::vector<VertexPN> &vertices,
+        const std::vector<uint32_t> &indices)
+    {
+        // 既存リソースの破棄
+        if (dst.vao)
+        {
+            glDeleteVertexArrays(1, &dst.vao);
+            dst.vao = 0;
+        }
+        if (dst.vbo)
+        {
+            glDeleteBuffers(1, &dst.vbo);
+            dst.vbo = 0;
+        }
+        if (dst.ebo)
+        {
+            glDeleteBuffers(1, &dst.ebo);
+            dst.ebo = 0;
+        }
 
-    // 単位カプセル: 半径1, 平行部長さ2, 軸Z
-    // 元の drawCapsuleCenteredX と同じ分割ロジックでメッシュを作る
-    static void buildUnitCapsuleMesh(Mesh &dstMesh)
+        glGenVertexArrays(1, &dst.vao);
+        glBindVertexArray(dst.vao);
+
+        glGenBuffers(1, &dst.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, dst.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     vertices.size() * sizeof(VertexPN),
+                     vertices.data(),
+                     GL_STATIC_DRAW);
+
+        glGenBuffers(1, &dst.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dst.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        dst.indexCount = static_cast<GLsizei>(indices.size());
+
+        glBindVertexArray(0);
+    }
+    static void buildUnitCapsuleParts(
+        Mesh &bodyMesh,
+        Mesh &capTopMesh,
+        Mesh &capBottomMesh)
     {
         using std::cos;
         using std::sin;
 
-        std::vector<VertexPN> vertices;
-        std::vector<uint32_t> indices;
+        // ========= パラメータ =========
+        constexpr int capsule_quality = 3;  // 1〜3
+        const int n = capsule_quality * 12; // 円周分割数（4の倍数）
+        const float length = 2.0f;          // 平行部長さ
+        const float radius = 1.0f;          // 半径
 
-        auto addVertex = [&](float x, float y, float z,
-                             float nx, float ny, float nz) -> uint32_t
-        {
-            VertexPN v;
-            v.pos = glm::vec3(x, y, z);
-            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
-            vertices.push_back(v);
-            return static_cast<uint32_t>(vertices.size() - 1);
-        };
-
-        // ========= パラメータ（元コードと対応） =========
-        constexpr int capsule_quality = 3; // 1〜3
-        const int n = capsule_quality * 12; // n は 4 の倍数
-        const float length = 2.0f;         // 平行部の長さ
-        const float radius = 1.0f;         // 半径
-
-        const float l = length * 0.5f; // cylinder は z = ±l
+        const float l = length * 0.5f; // cylinder は z = ±l (=±1)
         const float r = radius;
 
         const float a = 2.0f * static_cast<float>(M_PI) / static_cast<float>(n);
         const float sa = std::sin(a);
         const float ca = std::cos(a);
 
-        // =================================================
-        // 1. 円筒本体: 元の「draw cylinder body」をメッシュ化
-        // =================================================
+        // 円筒用
+        std::vector<VertexPN> cylVerts;
+        std::vector<uint32_t> cylIndices;
 
+        auto addCylVertex = [&](float x, float y, float z,
+                                float nx, float ny, float nz) -> uint32_t
+        {
+            VertexPN v;
+            v.pos = glm::vec3(x, y, z);
+            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
+            cylVerts.push_back(v);
+            return static_cast<uint32_t>(cylVerts.size() - 1);
+        };
+
+        // 上キャップ用
+        std::vector<VertexPN> capTopVerts;
+        std::vector<uint32_t> capTopIndices;
+
+        auto addCapTopVertex = [&](float x, float y, float z,
+                                   float nx, float ny, float nz) -> uint32_t
+        {
+            VertexPN v;
+            v.pos = glm::vec3(x, y, z);
+            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
+            capTopVerts.push_back(v);
+            return static_cast<uint32_t>(capTopVerts.size() - 1);
+        };
+
+        // 下キャップ用
+        std::vector<VertexPN> capBottomVerts;
+        std::vector<uint32_t> capBottomIndices;
+
+        auto addCapBottomVertex = [&](float x, float y, float z,
+                                      float nx, float ny, float nz) -> uint32_t
+        {
+            VertexPN v;
+            v.pos = glm::vec3(x, y, z);
+            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
+            capBottomVerts.push_back(v);
+            return static_cast<uint32_t>(capBottomVerts.size() - 1);
+        };
+
+        // =================================================
+        // 1. 円筒本体 (unit cylinder)
+        // =================================================
         float ny = 1.0f;
         float nz = 0.0f;
         float tmp;
-
-        // 元コードは TRIANGLE_STRIP で [vTop, vBottom, vTop, vBottom, ...]
-        // という順に出力していたので、それをそのまま再現して
-        // ストリップ → 三角形に変換する。
         bool firstPair = true;
         uint32_t prevTop = 0, prevBottom = 0;
 
         for (int i = 0; i <= n; ++i)
         {
-            // 頂点座標・法線（drawCapsuleCenteredX と同じ）
             float nx0 = ny;
             float ny0 = nz;
             float nz0 = 0.0f;
 
-            // 上側 (z = +l)
-            uint32_t vTop = addVertex(ny * r, nz * r, +l, nx0, ny0, nz0);
-            // 下側 (z = -l)
-            uint32_t vBottom = addVertex(ny * r, nz * r, -l, nx0, ny0, nz0);
+            uint32_t vTop = addCylVertex(ny * r, nz * r, +l, nx0, ny0, nz0);
+            uint32_t vBottom = addCylVertex(ny * r, nz * r, -l, nx0, ny0, nz0);
 
             if (!firstPair)
             {
-                // TRIANGLE_STRIP の展開：
-                // 以前: (prevTop, prevBottom), 今回: (vTop, vBottom)
-                // v0 = prevTop, v1 = prevBottom, v2 = vTop, v3 = vBottom
-                // 三角形: (v0,v1,v2), (v1,v3,v2)
-                indices.push_back(prevTop);
-                indices.push_back(prevBottom);
-                indices.push_back(vTop);
+                cylIndices.push_back(prevTop);
+                cylIndices.push_back(prevBottom);
+                cylIndices.push_back(vTop);
 
-                indices.push_back(prevBottom);
-                indices.push_back(vBottom);
-                indices.push_back(vTop);
+                cylIndices.push_back(prevBottom);
+                cylIndices.push_back(vBottom);
+                cylIndices.push_back(vTop);
             }
             else
             {
@@ -1966,90 +2052,15 @@ void main()
         }
 
         // =================================================
-        // 2. 上部キャップ（first cylinder cap）
-        //    元コードのロジックをそのまま三角形に変換
+        // 2. 上部キャップ (z >= +1)
         // =================================================
-
         float start_nx = 0.0f;
         float start_ny = 1.0f;
 
         for (int j = 0; j < (n / 4); ++j)
         {
-            // get start_n2 = rotated start_n
             float start_nx2 = ca * start_nx + sa * start_ny;
             float start_ny2 = -sa * start_nx + ca * start_ny;
-
-            // n = start_n, n2 = start_n2
-            float nx = start_nx;
-            float nyc = start_ny; // "ny" がすでに cylinder で使っているので別名
-            float nzc = 0.0f;
-
-            float nx2 = start_nx2;
-            float ny2c = start_ny2;
-            float nz2c = 0.0f;
-
-            firstPair = true;
-            uint32_t prev0 = 0, prev1 = 0;
-
-            for (int i = 0; i <= n; ++i)
-            {
-                // 元コード:
-                // glNormal3f(ny2, nz2, nx2);
-                // glVertex3f(ny2 * r, nz2 * r, l + nx2 * r);
-                // glNormal3f(ny, nz, nx);
-                // glVertex3f(ny * r, nz * r, l + nx * r);
-
-                uint32_t v0 = addVertex(ny2c * r, nz2c * r, l + nx2 * r,
-                                        ny2c, nz2c, nx2);
-                uint32_t v1 = addVertex(nyc * r, nzc * r, l + nx * r,
-                                        nyc, nzc, nx);
-
-                if (!firstPair)
-                {
-                    // strip 展開: 以前: (prev0,prev1), 今回: (v0,v1)
-                    indices.push_back(prev0);
-                    indices.push_back(prev1);
-                    indices.push_back(v0);
-
-                    indices.push_back(prev1);
-                    indices.push_back(v1);
-                    indices.push_back(v0);
-                }
-                else
-                {
-                    firstPair = false;
-                }
-
-                prev0 = v0;
-                prev1 = v1;
-
-                // rotate n, n2（元コードのまま）
-                tmp = ca * nyc - sa * nzc;
-                nzc = sa * nyc + ca * nzc;
-                nyc = tmp;
-
-                tmp = ca * ny2c - sa * nz2c;
-                nz2c = sa * ny2c + ca * nz2c;
-                ny2c = tmp;
-            }
-
-            start_nx = start_nx2;
-            start_ny = start_ny2;
-        }
-
-        // =================================================
-        // 3. 下部キャップ（second cylinder cap）
-        //    こちらも元コードのロジックをそのまま三角形に変換
-        // =================================================
-
-        start_nx = 0.0f;
-        start_ny = 1.0f;
-
-        for (int j = 0; j < (n / 4); ++j)
-        {
-            // get start_n2 = rotated start_n
-            float start_nx2 = ca * start_nx - sa * start_ny;
-            float start_ny2 = sa * start_nx + ca * start_ny;
 
             float nx = start_nx;
             float nyc = start_ny;
@@ -2064,27 +2075,24 @@ void main()
 
             for (int i = 0; i <= n; ++i)
             {
-                // 元コード:
-                // glNormal3d(ny,  nz,  nx );
-                // glVertex3d(ny  * r, nz  * r, -l + nx  * r);
-                // glNormal3d(ny2, nz2, nx2);
-                // glVertex3d(ny2 * r, nz2 * r, -l + nx2 * r);
+                // 元コードの頂点・法線
+                uint32_t v0 = addCapTopVertex(
+                    ny2c * r, nz2c * r, l + nx2 * r,
+                    ny2c, nz2c, nx2);
 
-                uint32_t v0 = addVertex(nyc * r, nzc * r, -l + nx * r,
-                                        nyc, nzc, nx);
-                uint32_t v1 = addVertex(ny2c * r, nz2c * r, -l + nx2 * r,
-                                        ny2c, nz2c, nx2);
+                uint32_t v1 = addCapTopVertex(
+                    nyc * r, nzc * r, l + nx * r,
+                    nyc, nzc, nx);
 
                 if (!firstPair)
                 {
-                    // strip 展開
-                    indices.push_back(prev0);
-                    indices.push_back(prev1);
-                    indices.push_back(v0);
+                    capTopIndices.push_back(prev0);
+                    capTopIndices.push_back(prev1);
+                    capTopIndices.push_back(v0);
 
-                    indices.push_back(prev1);
-                    indices.push_back(v1);
-                    indices.push_back(v0);
+                    capTopIndices.push_back(prev1);
+                    capTopIndices.push_back(v1);
+                    capTopIndices.push_back(v0);
                 }
                 else
                 {
@@ -2109,60 +2117,75 @@ void main()
         }
 
         // =================================================
-        // 4. Mesh → VAO/VBO/EBO に転送
+        // 3. 下部キャップ (z <= -1)
         // =================================================
+        start_nx = 0.0f;
+        start_ny = 1.0f;
 
-        // 既存リソースの破棄
-        if (dstMesh.vao)
+        for (int j = 0; j < (n / 4); ++j)
         {
-            glDeleteVertexArrays(1, &dstMesh.vao);
-            dstMesh.vao = 0;
+            float start_nx2 = ca * start_nx - sa * start_ny;
+            float start_ny2 = sa * start_nx + ca * start_ny;
+
+            float nx = start_nx;
+            float nyc = start_ny;
+            float nzc = 0.0f;
+
+            float nx2 = start_nx2;
+            float ny2c = start_ny2;
+            float nz2c = 0.0f;
+
+            firstPair = true;
+            uint32_t prev0 = 0, prev1 = 0;
+
+            for (int i = 0; i <= n; ++i)
+            {
+                uint32_t v0 = addCapBottomVertex(
+                    nyc * r, nzc * r, -l + nx * r,
+                    nyc, nzc, nx);
+
+                uint32_t v1 = addCapBottomVertex(
+                    ny2c * r, nz2c * r, -l + nx2 * r,
+                    ny2c, nz2c, nx2);
+
+                if (!firstPair)
+                {
+                    capBottomIndices.push_back(prev0);
+                    capBottomIndices.push_back(prev1);
+                    capBottomIndices.push_back(v0);
+
+                    capBottomIndices.push_back(prev1);
+                    capBottomIndices.push_back(v1);
+                    capBottomIndices.push_back(v0);
+                }
+                else
+                {
+                    firstPair = false;
+                }
+
+                prev0 = v0;
+                prev1 = v1;
+
+                // rotate n, n2
+                tmp = ca * nyc - sa * nzc;
+                nzc = sa * nyc + ca * nzc;
+                nyc = tmp;
+
+                tmp = ca * ny2c - sa * nz2c;
+                nz2c = sa * ny2c + ca * nz2c;
+                ny2c = tmp;
+            }
+
+            start_nx = start_nx2;
+            start_ny = start_ny2;
         }
-        if (dstMesh.vbo)
-        {
-            glDeleteBuffers(1, &dstMesh.vbo);
-            dstMesh.vbo = 0;
-        }
-        if (dstMesh.ebo)
-        {
-            glDeleteBuffers(1, &dstMesh.ebo);
-            dstMesh.ebo = 0;
-        }
 
-        glGenVertexArrays(1, &dstMesh.vao);
-        glBindVertexArray(dstMesh.vao);
-
-        glGenBuffers(1, &dstMesh.vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, dstMesh.vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     vertices.size() * sizeof(VertexPN),
-                     vertices.data(),
-                     GL_STATIC_DRAW);
-
-        glGenBuffers(1, &dstMesh.ebo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dstMesh.ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                     indices.size() * sizeof(uint32_t),
-                     indices.data(),
-                     GL_STATIC_DRAW);
-
-        // layout(location=0) vec3 aPos;
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(
-            0, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPN),
-            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
-
-        // layout(location=1) vec3 aNormal;
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(
-            1, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPN),
-            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
-
-        dstMesh.indexCount = static_cast<GLsizei>(indices.size());
-
-        glBindVertexArray(0);
+        // =================================================
+        // 4. Mesh へ転送
+        // =================================================
+        createMeshFromVectors(bodyMesh, cylVerts, cylIndices);
+        createMeshFromVectors(capTopMesh, capTopVerts, capTopIndices);
+        createMeshFromVectors(capBottomMesh, capBottomVerts, capBottomIndices);
     }
 
     void DrawstuffApp::initTriangleMesh()
@@ -2348,7 +2371,9 @@ void main()
         buildCylinderMeshForQuality(3, meshCylinder_[3]);
 
         // --- ここから capsule 用メッシュ生成 ---
-        buildUnitCapsuleMesh(meshCapsule_);
+        buildUnitCapsuleParts(meshCapsuleBody_,
+                              meshCapsuleCapTop_,
+                              meshCapsuleCapBottom_);
 
         initTriangleMesh();
         initTrianglesBatchMesh();
@@ -2474,44 +2499,6 @@ void main()
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
 
-        if (/* backend_ == GLBackend::Legacy */ false)
-        {
-            // ---- 旧実装：そのまま残しておく ----
-            glEnable(GL_LIGHTING);
-            glDisable(GL_TEXTURE_2D);
-            glShadeModel(GL_FLAT);
-
-            for (int i = -1; i <= 1; i++)
-            {
-                for (int j = -1; j <= 1; j++)
-                {
-                    glPushMatrix();
-                    glTranslatef((float)i, (float)j, (float)0);
-                    if (i == 1 && j == 0)
-                        setColor(1, 0, 0, 1);
-                    else if (i == 0 && j == 1)
-                        setColor(0, 0, 1, 1);
-                    else
-                        setColor(1, 1, 0, 1);
-                    const float k = 0.03f;
-                    glBegin(GL_TRIANGLE_FAN);
-                    glNormal3f(0, -1, 1);
-                    glVertex3f(0, 0, k);
-                    glVertex3f(-k, -k, 0);
-                    glVertex3f(k, -k, 0);
-                    glNormal3f(1, 0, 1);
-                    glVertex3f(k, k, 0);
-                    glNormal3f(0, 1, 1);
-                    glVertex3f(-k, k, 0);
-                    glNormal3f(-1, 0, 1);
-                    glVertex3f(-k, -k, 0);
-                    glEnd();
-                    glPopMatrix();
-                }
-            }
-            return;
-        }
-
         // ---- ここから Core33 用実装 ----
         // 固定機能のライトは core では使えないので、シェーダ側でライティングする想定
         glDisable(GL_LIGHTING);
@@ -2593,6 +2580,7 @@ void main()
         glUseProgram(programBasic_);
         glBindVertexArray(vao);
 
+        glUniform1i(uUseTex_, 0); // テクスチャは使わない
         const float kScale = 0.03f; // 元コードの「k」に相当
 
         for (int i = -1; i <= 1; ++i)

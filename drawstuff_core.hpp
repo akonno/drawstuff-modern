@@ -271,33 +271,50 @@ namespace ds_internal
 
             setupDrawingMode();
 
-            float l = static_cast<float>(length);
-            float r = static_cast<float>(radius);
+            float l = static_cast<float>(length); // 平行部の長さ
+            float r = static_cast<float>(radius); // 半径
 
-            // 1) 半径スケール
-            glm::mat4 S = glm::scale(glm::mat4(1.0f), glm::vec3(r));
-
-            // 2) 平行部の不足分
-            float delta = 0.5f * (l - 2.0f * r);
-
-            glm::mat4 T_up = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, +delta));
-            glm::mat4 T_down = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -delta));
-
-            // 3) ODE の姿勢・位置
-            const T scaleXYZ[3] = { 1.0f, 1.0f, 1.0f }; // スケーリングは上でやる
+            // ODE の姿勢・位置（スケールはここでは使わない）
+            const T scaleXYZ[3] = {1.0, 1.0, 1.0};
             glm::mat4 W = buildModelMatrix(pos, R, scaleXYZ);
 
-            // 4) 上半分・下半分を別々に描画
-            glm::mat4 M_up = W * T_up * S;
-            glm::mat4 M_down = W * T_down * S;
+            // ---- 円筒部 ----
+            // unit cylinder: 半径1, z∈[-1,1]
+            // target: 半径 r, z∈[-l/2, +l/2]
+            float halfCyl = 0.5f * l;
+            glm::mat4 S_body = glm::scale(glm::mat4(1.0f),
+                                          glm::vec3(r, r, halfCyl));
+            glm::mat4 M_body = W * S_body;
 
-            drawMeshBasic(meshCapsule_, M_up, current_color);
-            drawMeshBasic(meshCapsule_, M_down, current_color);
+            drawMeshBasic(meshCapsuleBody_, M_body, current_color);
+
+            // ---- 上キャップ ----
+            // unit: center (0,0,1), radius 1
+            // scale → center (0,0,r)、さらに z=(l/2) にしたい
+            float tz_top = halfCyl - r; // z方向の補正
+            glm::mat4 S_cap = glm::scale(glm::mat4(1.0f),
+                                         glm::vec3(r, r, r));
+            glm::mat4 T_capTop = glm::translate(glm::mat4(1.0f),
+                                                glm::vec3(0.0f, 0.0f, tz_top));
+            glm::mat4 M_capTop = W * T_capTop * S_cap;
+
+            drawMeshBasic(meshCapsuleCapTop_, M_capTop, current_color);
+
+            // ---- 下キャップ ----
+            // unit: center (0,0,-1) → scale後 center (0,0,-r)
+            // target: center (0,0,-l/2)
+            float tz_bottom = -halfCyl + r;
+            glm::mat4 T_capBottom = glm::translate(glm::mat4(1.0f),
+                                                   glm::vec3(0.0f, 0.0f, tz_bottom));
+            glm::mat4 M_capBottom = W * T_capBottom * S_cap;
+
+            drawMeshBasic(meshCapsuleCapBottom_, M_capBottom, current_color);
 
             if (use_shadows)
             {
-                drawShadowMesh(meshCapsule_, M_up);
-                drawShadowMesh(meshCapsule_, M_down);
+                drawShadowMesh(meshCapsuleBody_, M_body);
+                drawShadowMesh(meshCapsuleCapTop_, M_capTop);
+                drawShadowMesh(meshCapsuleCapBottom_, M_capBottom);
             }
         }
 
@@ -474,7 +491,7 @@ namespace ds_internal
         Mesh meshBox_;
         Mesh meshSphere_[4];
         Mesh meshCylinder_[4];
-        Mesh meshCapsule_; // カプセル用メッシュ
+        Mesh meshCapsuleBody_, meshCapsuleCapTop_, meshCapsuleCapBottom_; // カプセル用メッシュ
         Mesh meshTriangle_;
         Mesh meshTrianglesBatch_;
 
