@@ -1,8 +1,9 @@
 // drawstuff_core.hpp (仮称) – 内部専用ヘッダ
 #pragma once
 
-#include <memory>
 #include <array>
+#include <iostream>
+#include <memory>
 #include <cmath>
 #include <X11/Xlib.h>  // XEvent など
 #include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
@@ -82,6 +83,14 @@ namespace ds_internal
     {
         Legacy, // 今までどおり glBegin なども使える
         Core33, // シェーダ + VAO/VBO + 自前行列 のみ
+    };
+
+    struct Mesh
+    {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLuint ebo = 0; // インデックスを使うなら
+        GLsizei indexCount = 0;
     };
 
     // constants to convert degrees to radians and the reverse
@@ -191,9 +200,10 @@ namespace ds_internal
                 glLoadMatrixf(glm::value_ptr(view_));
             }
         }
+
         template <typename T>
         void drawBox(const T pos[3], const T R[12],
-                     const T sides[3])
+                                   const T sides[3])
         {
             static_assert(
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
@@ -201,78 +211,41 @@ namespace ds_internal
 
             if (current_state != SIM_STATE_DRAWING)
                 fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glShadeModel(GL_FLAT);
-            setTransform(pos, R);
-            drawBoxCentered(sides);
-            glPopMatrix();
 
-            if (use_shadows)
-            {
-                setShadowDrawingMode();
-                setShadowTransform();
-                setTransform(pos, R);
-                drawBoxCentered(sides);
-                glPopMatrix();
-                glPopMatrix();
-                glDepthRange(0, 1);
-            }
+            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+
+            glm::mat4 model = buildModelMatrix(pos, R, sides);
+
+            // 本体（Core パス）
+            drawMeshBasic(meshBox_, model, current_color);
+
+            // 影（Core パス）
+            drawShadowMesh(meshBox_, model);
         }
+
         template <typename T>
         void drawSphere(const T pos[3], const T R[12],
-                        const T radius)
+                     const T radius)
         {
+            static_assert(
+                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                "T must be float or double");
+
             if (current_state != SIM_STATE_DRAWING)
                 fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glEnable(GL_NORMALIZE);
-            glShadeModel(GL_SMOOTH);
-            setTransform(pos, R);
-            glScaled(radius, radius, radius);
-            drawUnitSphere();
-            glPopMatrix();
-            glDisable(GL_NORMALIZE);
 
-            // draw shadows
-            // In the original code, shadows for spheres were drawn using a
-            // specialized function drawSphereShadow().
-            // if (use_shadows)
-            // {
-            //     glDisable(GL_LIGHTING);
-            //     if (use_textures)
-            //     {
-            //         ground_texture->bind(1);
-            //         glEnable(GL_TEXTURE_2D);
-            //         glDisable(GL_TEXTURE_GEN_S);
-            //         glDisable(GL_TEXTURE_GEN_T);
-            //         glColor3f(SHADOW_INTENSITY, SHADOW_INTENSITY, SHADOW_INTENSITY);
-            //     }
-            //     else
-            //     {
-            //         glDisable(GL_TEXTURE_2D);
-            //         glColor3f(GROUND_R * SHADOW_INTENSITY, GROUND_G * SHADOW_INTENSITY,
-            //                   GROUND_B * SHADOW_INTENSITY);
-            //     }
-            //     glShadeModel(GL_FLAT);
-            //     glDepthRange(0, 0.9999);
-            //     drawSphereShadow(pos[0], pos[1], pos[2], radius);
-            //     glDepthRange(0, 1);
-            // }
-            // Here, for better consistency
-            // with other shapes, we use the same approach as for capsules and
-            // cylinders, drawing the shadow as a flattened version of the object.
-            if (use_shadows)
-            {
-                setShadowDrawingMode();
-                setShadowTransform();
-                setTransform(pos, R);
-                glScaled(radius, radius, radius);
-                drawUnitSphere();
-                glPopMatrix();
-                glPopMatrix();
-                glDepthRange(0, 1);
-            }
+            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+
+            const T sides[3] = { radius, radius, radius };
+            glm::mat4 model = buildModelMatrix(pos, R, sides);
+
+            // 本体（Core パス）
+            drawMeshBasic(meshSphere_[sphere_quality], model, current_color);
+
+            // 影（Core パス）
+            drawShadowMesh(meshSphere_[sphere_quality], model);
         }
+
         template <typename T>
         void drawCapsule(const T pos[3], const T R[12],
                          const T length, const T radius)
@@ -419,6 +392,21 @@ namespace ds_internal
         DrawstuffApp(const DrawstuffApp &) = delete;
         DrawstuffApp &operator=(const DrawstuffApp &) = delete;
 
+        enum PrimitiveType
+        {
+            PRIMITIVE_SPHERE,
+            PRIMITIVE_BOX,
+            PRIMITIVE_CAPSULE,
+            PRIMITIVE_CYLINDER,
+            PRIMITIVE_CONVEX,
+            PRIMITIVE_TRIMESH,
+            // 他のプリミティブタイプもここに追加
+        };
+
+        Mesh meshBox_;
+        Mesh meshSphere_[4];
+        Mesh meshCylinder_[4];
+
         // matrices
         // カメラ・投影
         glm::mat4 view_{1.0f};
@@ -468,6 +456,25 @@ namespace ds_internal
         void initSkyProgram();
         void initSkyMesh();
 
+        // 影用：ライト方向と投影行列
+        glm::vec3 shadowLightDir_; // ライトの方向（ワールド座標）
+        glm::mat4 shadowProject_;  // 地面 z=0 への投影行列
+
+        // 影用シェーダ
+        GLuint programShadow_ = 0;
+        GLint uShadowMVP_ = -1;
+        GLint uShadowColor_ = -1;
+        GLint uShadowIntensity_ = -1;
+        GLint uShadowModel_ = -1;
+        GLint uShadowUseTex_ = -1;
+
+        // 影用の初期化ヘルパ
+        void initShadowProjection();
+        void initShadowProgram();
+
+        // 影描画ヘルパ（後で中身を実装）
+        // void drawShadowPrimitive(PrimitiveType type, const glm::mat4 &model);
+
         // 必要ならカメラパラメータも保存
         float cam_x_ = 0.0f, cam_y_ = 0.0f, cam_z_ = 0.0f;
         float cam_h_ = 0.0f, cam_p_ = 0.0f, cam_r_ = 0.0f;
@@ -482,7 +489,7 @@ namespace ds_internal
         std::array<float, 3> view_xyz;
         std::array<float, 3> view_hpr;
 
-        std::array<float, 4> current_color;
+        glm::vec4 current_color;
         int texture_id;
 
         dsFunctions callbacks_storage_;       // 渡された dsFunctions を保持（実体）
@@ -490,7 +497,7 @@ namespace ds_internal
 
         int sphere_quality = 3;
         int capsule_quality = 3;
-        int capped_cylinder_quality = 3;
+        int cylinder_quality = 3;
         int draw_mode = DS_POLYFILL;
         
         // 内部ヘルパー
@@ -502,6 +509,8 @@ namespace ds_internal
         void captureFrame(const int num);
         void initMotionModel();
         void applyViewpointToGL();
+        void buildSphereMeshForQuality(int quality, Mesh &dstMesh);
+        void createPrimitiveMeshes();
         void setupDrawingMode();
         void setShadowDrawingMode();
         void setShadowTransform();
@@ -512,6 +521,29 @@ namespace ds_internal
 
         void motion(const int mode, const int deltax, const int deltay);
         void wrapCameraAngles();
+
+        void drawMeshBasic(
+            const Mesh &mesh,
+            const glm::mat4 &model,
+            const glm::vec4 &color)
+        {
+            glm::mat4 shadowMvp = proj_ * view_ * model;
+
+            glUseProgram(programBasic_);
+            glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(shadowMvp));
+            glUniform4fv(uColor_, 1, glm::value_ptr(color));
+
+            glBindVertexArray(mesh.vao);
+            glDrawElements(GL_TRIANGLES, mesh.indexCount,
+                           GL_UNSIGNED_INT, nullptr);
+            glBindVertexArray(0);
+
+            glUseProgram(0);
+        }
+
+        void drawShadowMesh(
+            const Mesh &mesh,
+            const glm::mat4 &model);
 
         // テンプレート関数群
         template <typename T>
@@ -583,6 +615,38 @@ namespace ds_internal
             else
                 glMultMatrixd(matrix);
         }
+
+        template <typename T>
+        glm::mat4 buildModelMatrix(
+            const T pos[3], const T R[12], const T sides[3])
+        {
+            glm::mat4 model(1.0f);
+
+            // ODE R[12] → glm::mat4
+            glm::mat4 rot(1.0f);
+            rot[0][0] = R[0];
+            rot[0][1] = R[1];
+            rot[0][2] = R[2];
+            rot[1][0] = R[4];
+            rot[1][1] = R[5];
+            rot[1][2] = R[6];
+            rot[2][0] = R[8];
+            rot[2][1] = R[9];
+            rot[2][2] = R[10];
+
+            model = glm::translate(model,
+                                   glm::vec3((float)pos[0], (float)pos[1], (float)pos[2]));
+            model *= rot;
+
+            // 単位ボックスが [-0.5, 0.5]^3 なので 0.5 を掛ける
+            model = glm::scale(model,
+                               glm::vec3((float)sides[0],
+                                         (float)sides[1],
+                                         (float)sides[2]));
+
+            return model;
+        }
+
         template <typename T>
         void drawIndexedConvexPolyhedron(const T *_planes, const unsigned int _planecount,
                                          const T *_points, const unsigned int _pointcount,
@@ -624,98 +688,6 @@ namespace ds_internal
                 }
                 glEnd();
             }
-        }
-        template <typename T>
-        void drawBoxCentered(const T sides[3])
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // 原点を中心とし，座標軸に沿った直方体を描画
-            T lx = sides[0] * 0.5f;
-            T ly = sides[1] * 0.5f;
-            T lz = sides[2] * 0.5f;
-
-            // sides
-            glBegin(GL_TRIANGLE_STRIP);
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3f(0, 0, 0);
-                glNormal3f(-1, 0, 0);
-                glVertex3f(-lx, -ly, -lz);
-                glVertex3f(-lx, -ly, lz);
-                glVertex3f(-lx, ly, -lz);
-                glVertex3f(-lx, ly, lz);
-                glNormal3f(0, 1, 0);
-                glVertex3f(lx, ly, -lz);
-                glVertex3f(lx, ly, lz);
-                glNormal3f(1, 0, 0);
-                glVertex3f(lx, -ly, -lz);
-                glVertex3f(lx, -ly, lz);
-                glNormal3f(0, -1, 0);
-                glVertex3f(-lx, -ly, -lz);
-                glVertex3f(-lx, -ly, lz);
-            }
-            else
-            {
-                glNormal3d(0, 0, 0);
-                glNormal3d(-1, 0, 0);
-                glVertex3d(-lx, -ly, -lz);
-                glVertex3d(-lx, -ly, lz);
-                glVertex3d(-lx, ly, -lz);
-                glVertex3d(-lx, ly, lz);
-                glNormal3d(0, 1, 0);
-                glVertex3d(lx, ly, -lz);
-                glVertex3d(lx, ly, lz);
-                glNormal3d(1, 0, 0);
-                glVertex3d(lx, -ly, -lz);
-                glVertex3d(lx, -ly, lz);
-                glNormal3d(0, -1, 0);
-                glVertex3d(-lx, -ly, -lz);
-                glVertex3d(-lx, -ly, lz);
-            }
-            glEnd();
-
-            // top face
-            glBegin(GL_TRIANGLE_FAN);
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3f(0, 0, 1);
-                glVertex3f(-lx, -ly, lz);
-                glVertex3f(lx, -ly, lz);
-                glVertex3f(lx, ly, lz);
-                glVertex3f(-lx, ly, lz);
-            }
-            else
-            {
-                glNormal3d(0, 0, 1);
-                glVertex3d(-lx, -ly, lz);
-                glVertex3d(lx, -ly, lz);
-                glVertex3d(lx, ly, lz);
-                glVertex3d(-lx, ly, lz);
-            }
-            glEnd();
-
-            // bottom face
-            glBegin(GL_TRIANGLE_FAN);
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3f(0, 0, -1);
-                glVertex3f(-lx, -ly, -lz);
-                glVertex3f(-lx, ly, -lz);
-                glVertex3f(lx, ly, -lz);
-                glVertex3f(lx, -ly, -lz);
-            }
-            else
-            {
-                glNormal3d(0, 0, -1);
-                glVertex3d(-lx, -ly, -lz);
-                glVertex3d(-lx, ly, -lz);
-                glVertex3d(lx, ly, -lz);
-                glVertex3d(lx, -ly, -lz);
-            }
-            glEnd();
         }
         template <typename T>
         void drawSphereShadow(const T px, const T py, const T pz,

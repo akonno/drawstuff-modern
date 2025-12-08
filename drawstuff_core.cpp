@@ -30,10 +30,12 @@
 #include <windows.h>
 #endif
 
+#include <array>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <chrono>
+#include <vector>
 
 #include <cmath>
 #include <cstdio>
@@ -110,6 +112,39 @@ namespace
     }
 
 } // namespace
+
+namespace
+{
+
+    // ライト方向から「z=0 への影投影行列」を作る
+    glm::mat4 makeShadowProjectMatrix(const glm::vec3 &lightDir)
+    {
+        // 念のため正規化しておく
+        glm::vec3 L = glm::normalize(lightDir);
+
+        // L.z が 0 に近いとまずいので、簡易ガード
+        if (std::abs(L.z) < 1e-4f)
+        {
+            // 真横からの光は許容しない：少しだけ下向きに傾ける
+            L.z = (L.z >= 0.0f ? 1e-4f : -1e-4f);
+        }
+
+        const float kx = L.x / L.z;
+        const float ky = L.y / L.z;
+
+        // 列優先（column-major）で指定
+        return glm::mat4(
+            // column 0
+            1.0f, 0.0f, 0.0f, 0.0f,
+            // column 1
+            0.0f, 1.0f, 0.0f, 0.0f,
+            // column 2
+            -kx, -ky, 0.0f, 0.0f,
+            // column 3
+            0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+} // anonymous namespace
 
 namespace ds_internal
 {
@@ -326,7 +361,7 @@ namespace ds_internal
         pausemode(false),
         view_xyz{{2.0f, 0.0f, 1.0f}},
         view_hpr{{180.0f, 0.0f, 0.0f}},
-        current_color{{1.0f, 1.0f, 1.0f, 1.0f}},
+        current_color(1.0f, 1.0f, 1.0f, 1.0f),
         texture_id(0),
         callbacks_(nullptr)
     {
@@ -486,6 +521,7 @@ void main()
         uGroundScale_ = glGetUniformLocation(programGround_, "uGroundScale");
         uGroundOffset_ = glGetUniformLocation(programGround_, "uGroundOffset");
         uGroundUseTex_ = glGetUniformLocation(programGround_, "uUseTex");
+        uShadowIntensity_ = glGetUniformLocation(programShadow_, "uShadowIntensity");
     }
 
     void DrawstuffApp::initGroundMesh()
@@ -670,6 +706,163 @@ void main()
             sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
 
         glBindVertexArray(0);
+    }
+
+    void DrawstuffApp::initShadowProjection()
+    {
+        // 元の drawFrame にあったライト設定：
+        // static GLfloat light_position[] = { LIGHTX, LIGHTY, 1.0, 0.0 };
+        //
+        // これと同じ方向を使う：
+        shadowLightDir_ = glm::normalize(glm::vec3(LIGHTX, LIGHTY, 1.0f));
+        shadowProject_ = makeShadowProjectMatrix(shadowLightDir_);
+    }
+
+    void DrawstuffApp::initShadowProgram()
+    {
+        if (programShadow_ != 0)
+            return;
+
+        static const char *shadow_vs_src = R"GLSL(
+// shadow.vs
+#version 330 core
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+uniform mat4 uShadowMVP;    // proj * view * shadowModel
+uniform mat4 uShadowModel;  // ★ 影としてのモデル行列（= shadowModel）
+uniform vec2 uGroundScale;
+uniform vec2 uGroundOffset;
+
+out vec2 vTex;
+
+void main()
+{
+    // 影として地面上に投影されたワールド座標
+    vec4 shadowWorld = uShadowModel * vec4(aPos, 1.0);
+
+    // ground と同じ定義: (x,y) にスケール＋オフセット
+    vTex = shadowWorld.xy * uGroundScale + uGroundOffset;
+
+    // 位置も同じ shadowWorld を使う（事前に uShadowMVP = proj*view*uShadowModel にしてある前提）
+    gl_Position = uShadowMVP * vec4(aPos, 1.0);
+}
+)GLSL";
+
+        static const char *shadow_fs_src = R"GLSL(
+// shadow.fs
+#version 330 core
+
+in vec2 vTex;
+out vec4 FragColor;
+
+uniform sampler2D uGroundTex;
+uniform float uShadowIntensity;  // 例: 0.5f
+uniform bool  uUseTex;      // ★ 追加：テクスチャを使うか
+uniform vec3  uGroundColor;      // ★ 追加：テクスチャ無し時の地面色 (GROUND_R,G,B)
+
+void main()
+{
+    vec3 base;
+
+    if (uUseTex) {
+        // テクスチャあり：地面テクスチャをそのままベースに
+        base = texture(uGroundTex, vTex).rgb;
+    } else {
+        // テクスチャなし：地面のフラットカラー
+        base = uGroundColor;
+    }
+
+    // SHADOW_INTENSITY 倍だけ暗くする
+    vec3 shaded = base * uShadowIntensity;
+
+    FragColor = vec4(shaded, 1.0);
+}
+)GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, shadow_vs_src);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, shadow_fs_src);
+        if (!vs || !fs)
+        {
+            internalError("Failed to compile shadow shaders");
+        }
+
+        programShadow_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programShadow_)
+        {
+            internalError("Failed to link shadow shader program");
+        }
+
+        // すでにあるもの
+        uShadowMVP_ = glGetUniformLocation(programShadow_, "uShadowMVP");
+        uShadowModel_ = glGetUniformLocation(programShadow_, "uShadowModel");
+        uGroundScale_ = glGetUniformLocation(programShadow_, "uGroundScale");
+        uGroundOffset_ = glGetUniformLocation(programShadow_, "uGroundOffset");
+        uGroundTex_ = glGetUniformLocation(programShadow_, "uGroundTex");
+        uShadowIntensity_ = glGetUniformLocation(programShadow_, "uShadowIntensity");
+
+        // ★ 新しく追加
+        uShadowUseTex_ = glGetUniformLocation(programShadow_, "uUseTex");
+        uGroundColor_ = glGetUniformLocation(programShadow_, "uGroundColor");
+    }
+
+    void DrawstuffApp::drawShadowMesh(
+        const Mesh &mesh,
+        const glm::mat4 &model)
+    {
+        if (!use_shadows)
+            return;
+
+        initShadowProgram();
+
+        glm::mat4 shadowModel = shadowProject_ * model;
+        glm::mat4 mvp = proj_ * view_ * shadowModel;
+
+        glUseProgram(programShadow_);
+
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1.0f, -1.0f);
+
+        glDisable(GL_BLEND); // ここは「上書き型の影」でいく前提
+
+        // 行列・共通パラメータ
+        glUniformMatrix4fv(uShadowMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
+        glUniformMatrix4fv(uShadowModel_, 1, GL_FALSE, glm::value_ptr(shadowModel));
+
+        glUniform2f(uGroundScale_, ground_scale, ground_scale);
+        glUniform2f(uGroundOffset_, ground_ofsx, ground_ofsy);
+        glUniform1f(uShadowIntensity_, SHADOW_INTENSITY);
+
+        if (use_textures)
+        {
+            // ★ テクスチャあり：旧 setShadowDrawingMode の「if (use_textures)」相当
+            glUniform1i(uShadowUseTex_, GL_TRUE);
+
+            glActiveTexture(GL_TEXTURE0);
+            ground_texture->bind(0);
+            glUniform1i(uGroundTex_, 0);
+        }
+        else
+        {
+            // ★ テクスチャなし：旧コードの else 分岐相当
+            glUniform1i(uShadowUseTex_, GL_FALSE);
+            // GROUND_R/G/B は既存の地面色定数を流用
+            glUniform3f(uGroundColor_, GROUND_R, GROUND_G, GROUND_B);
+        }
+
+        glBindVertexArray(mesh.vao);
+        glDrawElements(GL_TRIANGLES, mesh.indexCount,
+                       GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glUseProgram(0);
     }
 
     Display *display = nullptr;
@@ -977,6 +1170,8 @@ void main()
 
         startGraphics(window_width, window_height, fn);
 
+        initShadowProjection();
+        
         static bool firsttime = true;
         if (firsttime)
         {
@@ -1274,6 +1469,262 @@ void main()
         matrix[15] = 1;
         glPushMatrix();
         glMultMatrixf(matrix);
+    }
+    // ヘッダ or cpp のファイルスコープに置いてしまって良い（display list は不要）
+    constexpr float ICX = 0.525731112119133606f;
+    constexpr float ICZ = 0.850650808352039932f;
+
+    static const GLfloat gSphereIcosaVerts[12][3] = {
+        {-ICX, 0, ICZ},
+        {ICX, 0, ICZ},
+        {-ICX, 0, -ICZ},
+        {ICX, 0, -ICZ},
+        {0, ICZ, ICX},
+        {0, ICZ, -ICX},
+        {0, -ICZ, ICX},
+        {0, -ICZ, -ICX},
+        {ICZ, ICX, 0},
+        {-ICZ, ICX, 0},
+        {ICZ, -ICX, 0},
+        {-ICZ, -ICX, 0}};
+
+    static const int gSphereIcosaFaces[20][3] = {
+        {0, 4, 1},
+        {0, 9, 4},
+        {9, 5, 4},
+        {4, 5, 8},
+        {4, 8, 1},
+        {8, 10, 1},
+        {8, 3, 10},
+        {5, 3, 8},
+        {5, 2, 3},
+        {2, 7, 3},
+        {7, 10, 3},
+        {7, 6, 10},
+        {7, 11, 6},
+        {11, 0, 6},
+        {0, 1, 6},
+        {6, 1, 10},
+        {9, 0, 11},
+        {9, 11, 2},
+        {9, 2, 5},
+        {7, 2, 11},
+    };
+
+    struct VertexPN
+    {
+        glm::vec3 pos;
+        glm::vec3 normal;
+    };
+
+    static void appendSpherePatch(
+        const glm::vec3 &p1,
+        const glm::vec3 &p2,
+        const glm::vec3 &p3,
+        int level,
+        std::vector<VertexPN> &vertices,
+        std::vector<uint32_t> &indices)
+    {
+        if (level > 0)
+        {
+            glm::vec3 q1 = glm::normalize(0.5f * (p1 + p2));
+            glm::vec3 q2 = glm::normalize(0.5f * (p2 + p3));
+            glm::vec3 q3 = glm::normalize(0.5f * (p3 + p1));
+
+            appendSpherePatch(p1, q1, q3, level - 1, vertices, indices);
+            appendSpherePatch(q1, p2, q2, level - 1, vertices, indices);
+            appendSpherePatch(q1, q2, q3, level - 1, vertices, indices);
+            appendSpherePatch(q3, q2, p3, level - 1, vertices, indices);
+        }
+        else
+        {
+            uint32_t base = static_cast<uint32_t>(vertices.size());
+            vertices.push_back({p1, glm::normalize(p1)});
+            vertices.push_back({p2, glm::normalize(p2)});
+            vertices.push_back({p3, glm::normalize(p3)});
+            indices.push_back(base);
+            indices.push_back(base + 1);
+            indices.push_back(base + 2);
+        }
+    }
+
+    void DrawstuffApp::buildSphereMeshForQuality(int quality, Mesh &dstMesh)
+    {
+        std::vector<VertexPN> vertices;
+        std::vector<uint32_t> indices;
+
+        int level = quality - 1; // quality=1 → 分割なし, 2→1回, 3→2回 … など
+
+        for (int i = 0; i < 20; ++i)
+        {
+            // ★ drawPatch と同じ頂点順序を使うのが安全
+            const GLfloat *pA = gSphereIcosaVerts[gSphereIcosaFaces[i][2]];
+            const GLfloat *pB = gSphereIcosaVerts[gSphereIcosaFaces[i][1]];
+            const GLfloat *pC = gSphereIcosaVerts[gSphereIcosaFaces[i][0]];
+
+            glm::vec3 p1(pA[0], pA[1], pA[2]);
+            glm::vec3 p2(pB[0], pB[1], pB[2]);
+            glm::vec3 p3(pC[0], pC[1], pC[2]);
+
+            appendSpherePatch(p1, p2, p3, level, vertices, indices);
+        }
+        
+        // ここから VAO / VBO / EBO を作成（box と同様）
+
+        // VAO
+        glGenVertexArrays(1, &dstMesh.vao);
+        glBindVertexArray(dstMesh.vao);
+
+        // VBO
+        glGenBuffers(1, &dstMesh.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, dstMesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     vertices.size() * sizeof(VertexPN),
+                     vertices.data(),
+                     GL_STATIC_DRAW);
+
+        // EBO
+        glGenBuffers(1, &dstMesh.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dstMesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location = 0) vec3 aPos;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0,                                                // location
+            3,                                                // size
+            GL_FLOAT,                                         // type
+            GL_FALSE,                                         // normalized
+            sizeof(VertexPN),                                 // stride
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)) // offset
+        );
+
+        // layout(location = 1) vec3 aNormal;
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,                                                   // location
+            3,                                                   // size
+            GL_FLOAT,                                            // type
+            GL_FALSE,                                            // normalized
+            sizeof(VertexPN),                                    // stride
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)) // offset
+        );
+
+        dstMesh.indexCount = static_cast<GLsizei>(indices.size());
+
+        // 後片付け
+        glBindVertexArray(0);
+    }
+
+    void DrawstuffApp::createPrimitiveMeshes()
+    {
+        // 頂点配列: position + normal (+ texcoord)
+        struct Vertex
+        {
+            float pos[3];
+            float normal[3];
+        };
+
+        // 6面 × 4頂点 = 24 頂点
+        std::vector<Vertex> vertices = {
+
+            // +X 面
+            {{+0.5f, -0.5f, -0.5f}, {+1, 0, 0}},
+            {{+0.5f, +0.5f, -0.5f}, {+1, 0, 0}},
+            {{+0.5f, +0.5f, +0.5f}, {+1, 0, 0}},
+            {{+0.5f, -0.5f, +0.5f}, {+1, 0, 0}},
+
+            // -X 面
+            {{-0.5f, -0.5f, +0.5f}, {-1, 0, 0}},
+            {{-0.5f, +0.5f, +0.5f}, {-1, 0, 0}},
+            {{-0.5f, +0.5f, -0.5f}, {-1, 0, 0}},
+            {{-0.5f, -0.5f, -0.5f}, {-1, 0, 0}},
+
+            // +Y 面
+            {{-0.5f, +0.5f, -0.5f}, {0, +1, 0}},
+            {{-0.5f, +0.5f, +0.5f}, {0, +1, 0}},
+            {{+0.5f, +0.5f, +0.5f}, {0, +1, 0}},
+            {{+0.5f, +0.5f, -0.5f}, {0, +1, 0}},
+
+            // -Y 面
+            {{-0.5f, -0.5f, +0.5f}, {0, -1, 0}},
+            {{-0.5f, -0.5f, -0.5f}, {0, -1, 0}},
+            {{+0.5f, -0.5f, -0.5f}, {0, -1, 0}},
+            {{+0.5f, -0.5f, +0.5f}, {0, -1, 0}},
+
+            // +Z 面
+            {{-0.5f, -0.5f, +0.5f}, {0, 0, +1}},
+            {{+0.5f, -0.5f, +0.5f}, {0, 0, +1}},
+            {{+0.5f, +0.5f, +0.5f}, {0, 0, +1}},
+            {{-0.5f, +0.5f, +0.5f}, {0, 0, +1}},
+
+            // -Z 面
+            {{+0.5f, -0.5f, -0.5f}, {0, 0, -1}},
+            {{-0.5f, -0.5f, -0.5f}, {0, 0, -1}},
+            {{-0.5f, +0.5f, -0.5f}, {0, 0, -1}},
+            {{+0.5f, +0.5f, -0.5f}, {0, 0, -1}},
+        };
+        // インデックス配列: 6面 × 2三角形 × 3頂点 = 36 インデックス
+        std::vector<uint32_t> indices = {
+            // +X
+            0, 1, 2, 0, 2, 3,
+
+            // -X
+            4, 5, 6, 4, 6, 7,
+
+            // +Y
+            8, 9, 10, 8, 10, 11,
+
+            // -Y
+            12, 13, 14, 12, 14, 15,
+
+            // +Z
+            16, 17, 18, 16, 18, 19,
+
+            // -Z
+            20, 21, 22, 20, 22, 23};
+
+        glGenVertexArrays(1, &meshBox_.vao);
+        glBindVertexArray(meshBox_.vao);
+
+        glGenBuffers(1, &meshBox_.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, meshBox_.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     vertices.size() * sizeof(Vertex),
+                     vertices.data(),
+                     GL_STATIC_DRAW);
+
+        glGenBuffers(1, &meshBox_.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, meshBox_.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location = 0) vec3 aPos;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                              sizeof(Vertex),
+                              reinterpret_cast<void *>(offsetof(Vertex, pos)));
+
+        // layout(location = 1) vec3 aNormal;
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
+                              sizeof(Vertex),
+                              reinterpret_cast<void *>(offsetof(Vertex, normal)));
+
+        meshBox_.indexCount = static_cast<GLsizei>(indices.size());
+
+        glBindVertexArray(0);
+
+        // --- ここから sphere 用メッシュ生成 ---
+
+        buildSphereMeshForQuality(1, meshSphere_[1]);
+        buildSphereMeshForQuality(2, meshSphere_[2]);
+        buildSphereMeshForQuality(3, meshSphere_[3]);
     }
 
     void DrawstuffApp::drawSky(const float view_xyz[3])
@@ -1617,12 +2068,13 @@ void main()
         const char *prefix = DEFAULT_PATH_TO_TEXTURES;
         if (fn->version >= 2 && fn->path_to_textures)
             prefix = fn->path_to_textures;
-        char *s = (char *)alloca(strlen(prefix) + 20);
 
         // GL 初期化
         gladLoadGL();
 
         initBasicProgram();
+
+        createPrimitiveMeshes();
 
         // ground メッシュがまだなら初期化
         initGroundProgram();
