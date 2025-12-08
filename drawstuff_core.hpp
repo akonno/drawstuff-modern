@@ -4,6 +4,7 @@
 #include <array>
 #include <iostream>
 #include <memory>
+#include <vector>
 #include <cmath>
 #include <X11/Xlib.h>  // XEvent など
 #include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
@@ -85,6 +86,12 @@ namespace ds_internal
         Core33, // シェーダ + VAO/VBO + 自前行列 のみ
     };
 
+    struct VertexPN
+    {
+        glm::vec3 pos;
+        glm::vec3 normal;
+    };
+
     struct Mesh
     {
         GLuint vao = 0;
@@ -138,7 +145,14 @@ namespace ds_internal
         void stopGraphics();
 
         void drawFrame(const int width, const int height, const dsFunctions *fn, const int pause);
-
+        void drawTriangleCore(const glm::vec3 p[3],
+                              const glm::vec3 &N,
+                              const glm::mat4 &model,
+                              const bool solid = true);
+        void drawTrianglesBatch(
+            const std::vector<VertexPN> &verts,
+            const glm::mat4 &model,
+            const bool solid = true);
         // setters/getters
         // 球などの表示品質設定
         void setSphereQuality(const int n) { sphere_quality = n; }
@@ -287,33 +301,6 @@ namespace ds_internal
             }
         }
 
-#if 0
-        template <typename T>
-        void drawCapsule(const T pos[3], const T R[12],
-                         const T length, const T radius)
-        {
-            // 旧 dsDrawCapsule から OpenGL 呼び出し部分を移植
-            if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glShadeModel(GL_SMOOTH);
-            setTransform(pos, R);
-            drawCapsuleCenteredX(length, radius);
-            glPopMatrix();
-
-            if (use_shadows)
-            {
-                setShadowDrawingMode();
-                setShadowTransform();
-                setTransform(pos, R);
-                drawCapsuleCenteredX(length, radius);
-                glPopMatrix();
-                glPopMatrix();
-                glDepthRange(0, 1);
-            }
-        }
-#endif
-
         template <typename T>
         void drawCylinder(const T pos[3], const T R[12],
                         const T length, const T radius)
@@ -327,8 +314,8 @@ namespace ds_internal
 
             setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
 
-            const T sides[3] = {radius, radius, length};
-            glm::mat4 model = buildModelMatrix(pos, R, sides);
+            const T scaleXYZ[3] = {radius, radius, length};
+            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
 
             // 本体（Core パス）
             drawMeshBasic(meshCylinder_[cylinder_quality], model, current_color);
@@ -337,41 +324,81 @@ namespace ds_internal
         }
 
         template <typename T>
-        void drawTriangle(const T pos[3], const T R[12],
-                          const T *v0, const T *v1,
-                          const T *v2, const int solid)
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // 旧 dsDrawTriangle から OpenGL 呼び出し部分を移植
-            if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glShadeModel(GL_FLAT);
-            setTransform(pos, R);
-            drawTriangleWithAutoNormal<T>(v0, v1, v2, solid);
-            glPopMatrix();
-        }
-        template <typename T>
         void drawTriangles(const T pos[3], const T R[12],
-                           const T *v, const int n, const int solid)
+                           const T *v, int n, const bool solid = true)
         {
             static_assert(
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            // 旧 dsDrawTriangles から OpenGL 呼び出し部分を移植
             if (current_state != SIM_STATE_DRAWING)
                 fatalError("drawing function called outside simulation loop");
+
             setupDrawingMode();
-            glShadeModel(GL_FLAT);
-            setTransform(pos, R);
-            int i;
-            for (i = 0; i < n; ++i, v += 9)
-                drawTriangleWithAutoNormal<T>(v, v + 3, v + 6, solid);
-            glPopMatrix();
+
+            // 1つの drawTriangles 呼び出しの中では pos,R は共通
+            const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
+            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+
+            // ---- ここからバッチ処理 ----
+
+            std::vector<VertexPN> verts;
+            verts.reserve(static_cast<std::size_t>(n) * 3);
+
+            const T *p = v;
+            for (int i = 0; i < n; ++i, p += 9)
+            {
+                glm::vec3 p0(
+                    static_cast<float>(p[0]),
+                    static_cast<float>(p[1]),
+                    static_cast<float>(p[2]));
+
+                glm::vec3 p1(
+                    static_cast<float>(p[3]),
+                    static_cast<float>(p[4]),
+                    static_cast<float>(p[5]));
+
+                glm::vec3 p2(
+                    static_cast<float>(p[6]),
+                    static_cast<float>(p[7]),
+                    static_cast<float>(p[8]));
+
+                glm::vec3 U = p1 - p0;
+                glm::vec3 V = p2 - p0;
+                glm::vec3 N = glm::normalize(glm::cross(U, V));
+
+                verts.push_back({p0, N});
+                verts.push_back({p1, N});
+                verts.push_back({p2, N});
+            }
+
+            drawTrianglesBatch(verts, model, solid);
+        }
+
+        template <typename T>
+        void drawTriangle(const T pos[3], const T R[12],
+                          const T *v0, const T *v1, const T *v2,
+                          const bool solid = true)
+        {
+            static_assert(
+                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                "T must be float or double");
+
+            if (current_state != SIM_STATE_DRAWING)
+                fatalError("drawing function called outside simulation loop");
+
+            setupDrawingMode();
+
+            const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
+            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 mvp = proj_ * view_ * model;
+
+            glUseProgram(programBasic_);
+            glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
+            glUniformMatrix4fv(uModel_, 1, GL_FALSE, glm::value_ptr(model));
+            glUniform4fv(uColor_, 1, glm::value_ptr(current_color));
+
+            drawTriangleWithAutoNormal(v0, v1, v2, model, solid);
         }
         template <typename T>
         void drawConvex(const T pos[3], const T R[12],
@@ -448,6 +475,10 @@ namespace ds_internal
         Mesh meshSphere_[4];
         Mesh meshCylinder_[4];
         Mesh meshCapsule_; // カプセル用メッシュ
+        Mesh meshTriangle_;
+        Mesh meshTrianglesBatch_;
+
+        std::size_t trianglesBatchCapacity_ = 0;
 
         // matrices
         // カメラ・投影
@@ -556,6 +587,8 @@ namespace ds_internal
         void applyViewpointToGL();
         void buildSphereMeshForQuality(int quality, Mesh &dstMesh);
         void buildCylinderMeshForQuality(int quality, Mesh &dstMesh);
+        void initTriangleMesh();
+        void initTrianglesBatchMesh();
         void createPrimitiveMeshes();
         void setupDrawingMode();
         void setShadowDrawingMode();
@@ -774,333 +807,37 @@ namespace ds_internal
             glEnd();
         }
 
-#if 0
-        template <typename T>
-        void drawCapsuleCenteredX(const T length, const T radius)
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // ここにカプセル描画コードを移植
-            int i, j;
-            T tmp, nx, ny, nz, start_nx, start_ny, a, ca, sa;
-            // number of sides to the cylinder (divisible by 4):
-            const int n = capsule_quality * 4;
-
-            const T l = length * 0.5f;
-            const T r = radius;
-            a = T(M_PI * 2.0) / T(n);
-            sa = (T)sin(a);
-            ca = (T)cos(a);
-
-            // draw cylinder body
-            ny = 1;
-            nz = 0; // normal vector = (0,ny,nz)
-            glBegin(GL_TRIANGLE_STRIP);
-            for (i = 0; i <= n; i++)
-            {
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glNormal3f(ny, nz, 0);
-                    glVertex3f(ny * r, nz * r, l);
-                    glNormal3f(ny, nz, 0);
-                    glVertex3f(ny * r, nz * r, -l);
-                }
-                else
-                {
-                    glNormal3d(ny, nz, 0);
-                    glVertex3d(ny * r, nz * r, l);
-                    glNormal3d(ny, nz, 0);
-                    glVertex3d(ny * r, nz * r, -l);
-                }
-                // rotate ny,nz
-                tmp = ca * ny - sa * nz;
-                nz = sa * ny + ca * nz;
-                ny = tmp;
-            }
-            glEnd();
-
-            // draw first cylinder cap
-            start_nx = 0;
-            start_ny = 1;
-            for (j = 0; j < (n / 4); j++)
-            {
-                // get start_n2 = rotated start_n
-                T start_nx2 = ca * start_nx + sa * start_ny;
-                T start_ny2 = -sa * start_nx + ca * start_ny;
-                // get n=start_n and n2=start_n2
-                nx = start_nx;
-                ny = start_ny;
-                nz = 0;
-                T nx2 = start_nx2, ny2 = start_ny2, nz2 = 0;
-                glBegin(GL_TRIANGLE_STRIP);
-                for (i = 0; i <= n; i++)
-                {
-                    if constexpr (std::is_same<T, float>::value)
-                    {
-                        glNormal3f(ny2, nz2, nx2);
-                        glVertex3f(ny2 * r, nz2 * r, l + nx2 * r);
-                        glNormal3f(ny, nz, nx);
-                        glVertex3f(ny * r, nz * r, l + nx * r);
-                    }
-                    else
-                    {
-                        glNormal3d(ny2, nz2, nx2);
-                        glVertex3d(ny2 * r, nz2 * r, l + nx2 * r);
-                        glNormal3d(ny, nz, nx);
-                        glVertex3d(ny * r, nz * r, l + nx * r);
-                    }
-                    // rotate n,n2
-                    tmp = ca * ny - sa * nz;
-                    nz = sa * ny + ca * nz;
-                    ny = tmp;
-                    tmp = ca * ny2 - sa * nz2;
-                    nz2 = sa * ny2 + ca * nz2;
-                    ny2 = tmp;
-                }
-                glEnd();
-                start_nx = start_nx2;
-                start_ny = start_ny2;
-            }
-
-            // draw second cylinder cap
-            start_nx = 0;
-            start_ny = 1;
-            for (j = 0; j < (n / 4); j++)
-            {
-                // get start_n2 = rotated start_n
-                float start_nx2 = ca * start_nx - sa * start_ny;
-                float start_ny2 = sa * start_nx + ca * start_ny;
-                // get n=start_n and n2=start_n2
-                nx = start_nx;
-                ny = start_ny;
-                nz = 0;
-                float nx2 = start_nx2, ny2 = start_ny2, nz2 = 0;
-                glBegin(GL_TRIANGLE_STRIP);
-                for (i = 0; i <= n; i++)
-                {
-                    glNormal3d(ny, nz, nx);
-                    glVertex3d(ny * r, nz * r, -l + nx * r);
-                    glNormal3d(ny2, nz2, nx2);
-                    glVertex3d(ny2 * r, nz2 * r, -l + nx2 * r);
-                    // rotate n,n2
-                    tmp = ca * ny - sa * nz;
-                    nz = sa * ny + ca * nz;
-                    ny = tmp;
-                    tmp = ca * ny2 - sa * nz2;
-                    nz2 = sa * ny2 + ca * nz2;
-                    ny2 = tmp;
-                }
-                glEnd();
-                start_nx = start_nx2;
-                start_ny = start_ny2;
-            }
-        }
-#endif
-
-        template <typename T>
-        void drawCylinderCenteredX(const T length, const T radius, const T zoffset)
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // ここに円柱描画コードを移植
-            int i;
-            T tmp, ny, nz, a, ca, sa;
-            const int n = 24; // number of sides to the cylinder (divisible by 4)
-
-            const T l = length * 0.5;
-            const T r = radius;
-            a = T(M_PI * 2.0) / T(n);
-            sa = T(sin(a));
-            ca = T(cos(a));
-
-            // draw cylinder body
-            ny = 1;
-            nz = 0; // normal vector = (0,ny,nz)
-            glBegin(GL_TRIANGLE_STRIP);
-            for (i = 0; i <= n; i++)
-            {
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glNormal3f(ny, nz, 0);
-                    glVertex3f(ny * r, nz * r, l + zoffset);
-                    glNormal3f(ny, nz, 0);
-                    glVertex3f(ny * r, nz * r, -l + zoffset);
-                }
-                else
-                {
-                    glNormal3d(ny, nz, 0);
-                    glVertex3d(ny * r, nz * r, l + zoffset);
-                    glNormal3d(ny, nz, 0);
-                    glVertex3d(ny * r, nz * r, -l + zoffset);
-                }
-                // rotate ny,nz
-                tmp = ca * ny - sa * nz;
-                nz = sa * ny + ca * nz;
-                ny = tmp;
-            }
-            glEnd();
-
-            // draw top cap
-            glShadeModel(GL_FLAT);
-            ny = 1;
-            nz = 0; // normal vector = (0,ny,nz)
-            glBegin(GL_TRIANGLE_FAN);
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3f(0, 0, 1);
-                glVertex3f(0, 0, l + zoffset);
-            }
-            else
-            {
-                glNormal3d(0, 0, 1);
-                glVertex3d(0, 0, l + zoffset);
-            }
-            for (i = 0; i <= n; i++)
-            {
-                if (i == 1 || i == n / 2 + 1)
-                    setColor(current_color[0] * 0.75f, current_color[1] * 0.75f, current_color[2] * 0.75f, current_color[3]);
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glNormal3f(0, 0, 1);
-                    glVertex3f(ny * r, nz * r, l + zoffset);
-                }
-                else
-                {
-                    glNormal3d(0, 0, 1);
-                    glVertex3d(ny * r, nz * r, l + zoffset);
-                }
-                if (i == 1 || i == n / 2 + 1)
-                    setColor(current_color[0], current_color[1], current_color[2], current_color[3]);
-                // rotate ny,nz
-                tmp = ca * ny - sa * nz;
-                nz = sa * ny + ca * nz;
-                ny = tmp;
-            }
-            glEnd();
-
-            // draw bottom cap
-            ny = 1;
-            nz = 0; // normal vector = (0,ny,nz)
-            glBegin(GL_TRIANGLE_FAN);
-            glNormal3d(0, 0, -1);
-            glVertex3d(0, 0, -l + zoffset);
-            for (i = 0; i <= n; i++)
-            {
-                if (i == 1 || i == n / 2 + 1)
-                    setColor(current_color[0] * 0.75f, current_color[1] * 0.75f, current_color[2] * 0.75f, current_color[3]);
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glNormal3f(0, 0, -1);
-                    glVertex3f(0, 0, -l + zoffset);
-                }
-                else
-                {
-                    glNormal3d(0, 0, -1);
-                    glVertex3d(0, 0, -l + zoffset);
-                }
-                if (i == 1 || i == n / 2 + 1)
-                    setColor(current_color[0], current_color[1], current_color[2], current_color[3]);
-                // rotate ny,nz
-                tmp = ca * ny + sa * nz;
-                nz = -sa * ny + ca * nz;
-                ny = tmp;
-            }
-            glEnd();
-        }
         template <typename T>
         void drawTriangleWithAutoNormal(const T *v0, const T *v1,
-                                        const T *v2, const int solid)
+                                        const T *v2,
+                                        const glm::mat4 &model,
+                                        const bool solid = true)
         {
             static_assert(
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            // ここに三角形描画コードを移植
-            T u[3], v[3], normal[3];
-            u[0] = v1[0] - v0[0];
-            u[1] = v1[1] - v0[1];
-            u[2] = v1[2] - v0[2];
-            v[0] = v2[0] - v0[0];
-            v[1] = v2[1] - v0[1];
-            v[2] = v2[2] - v0[2];
-            crossProduct3(normal, u, v);
-            normalizeVector3(normal);
+            // 1. T配列 → glm::vec3 に変換
+            glm::vec3 p[3] = {
+                glm::vec3(static_cast<float>(v0[0]),
+                          static_cast<float>(v0[1]),
+                          static_cast<float>(v0[2])),
+                glm::vec3(static_cast<float>(v1[0]),
+                          static_cast<float>(v1[1]),
+                          static_cast<float>(v1[2])),
+                glm::vec3(static_cast<float>(v2[0]),
+                          static_cast<float>(v2[1]),
+                          static_cast<float>(v2[2]))};
 
-            glBegin(solid ? GL_TRIANGLES : GL_LINE_STRIP);
+            // 2. 法線計算は glm だけで完結
+            glm::vec3 U = p[1] - p[0];
+            glm::vec3 V = p[2] - p[0];
+            glm::vec3 N = glm::normalize(glm::cross(U, V));
 
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3fv(normal);
-                glVertex3fv(v0);
-                glVertex3fv(v1);
-                glVertex3fv(v2);
-            }
-            else if constexpr (std::is_same<T, double>::value)
-            {
-                glNormal3dv(normal);
-                glVertex3dv(v0);
-                glVertex3dv(v1);
-                glVertex3dv(v2);
-            }
-            glEnd();
+            // 3. 実際の描画は非テンプレートのプライベート関数に丸投げ
+            drawTriangleCore(p, N, model, solid);
         }
-        template <typename T>
-        void drawUnitTriangles(const T pos[3], const T R[12],
-                               const T *v, int n, int solid);
-        template <typename T>
-        void drawPatch(const T p1[3], const T p2[3], const T p3[3], const int level)
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
 
-            int i;
-            if (level > 0)
-            {
-                T q1[3], q2[3], q3[3]; // sub-vertices
-                for (i = 0; i < 3; i++)
-                {
-                    q1[i] = 0.5f * (p1[i] + p2[i]);
-                    q2[i] = 0.5f * (p2[i] + p3[i]);
-                    q3[i] = 0.5f * (p3[i] + p1[i]);
-                }
-                T length1 = (T)(1.0 / sqrt(q1[0] * q1[0] + q1[1] * q1[1] + q1[2] * q1[2]));
-                T length2 = (T)(1.0 / sqrt(q2[0] * q2[0] + q2[1] * q2[1] + q2[2] * q2[2]));
-                T length3 = (T)(1.0 / sqrt(q3[0] * q3[0] + q3[1] * q3[1] + q3[2] * q3[2]));
-                for (i = 0; i < 3; i++)
-                {
-                    q1[i] *= length1;
-                    q2[i] *= length2;
-                    q3[i] *= length3;
-                }
-                drawPatch(p1, q1, q3, level - 1);
-                drawPatch(q1, p2, q2, level - 1);
-                drawPatch(q1, q2, q3, level - 1);
-                drawPatch(q3, q2, p3, level - 1);
-            }
-            else if constexpr (std::is_same<T, float>::value)
-            {
-                glNormal3f(p1[0], p1[1], p1[2]);
-                glVertex3f(p1[0], p1[1], p1[2]);
-                glNormal3f(p2[0], p2[1], p2[2]);
-                glVertex3f(p2[0], p2[1], p2[2]);
-                glNormal3f(p3[0], p3[1], p3[2]);
-                glVertex3f(p3[0], p3[1], p3[2]);
-            }
-            else if constexpr (std::is_same<T, double>::value)
-            {
-                glNormal3d(p1[0], p1[1], p1[2]);
-                glVertex3d(p1[0], p1[1], p1[2]);
-                glNormal3d(p2[0], p2[1], p2[2]);
-                glVertex3d(p2[0], p2[1], p2[2]);
-                glNormal3d(p3[0], p3[1], p3[2]);
-                glVertex3d(p3[0], p3[1], p3[2]);
-            }
-        }
         template <typename T>
         void drawLineLocalImmediate(const T pos1[3], const T pos2[3])
         {

@@ -64,6 +64,7 @@ const char *DEFAULT_PATH_TO_TEXTURES = "../textures/";
 
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/string_cast.hpp>
 
 namespace
 {
@@ -458,6 +459,8 @@ void main()
     // vec3 rgb = base * (0.3 + 0.7 * diff);
     vec3 rgb = base * (0.2 + 0.4 * diff);
     FragColor = vec4(rgb, uColor.a);
+
+    // FragColor = vec4(0.5 * N + 0.5, 1.0);  // デバッグ用：法線を色で可視化
 }
     )GLSL";
 
@@ -1386,8 +1389,8 @@ void main()
 
         float side = 0.01f * float(deltax);
         float fwd = (mode == 4) ? (0.01f * float(deltay)) : 0.0f;
-        float s = (float)sin(view_hpr[0] * DEG_TO_RAD);
-        float c = (float)cos(view_hpr[0] * DEG_TO_RAD);
+        float s = (float)std::sin(view_hpr[0] * DEG_TO_RAD);
+        float c = (float)std::cos(view_hpr[0] * DEG_TO_RAD);
 
         if (mode == 1)
         {
@@ -1598,12 +1601,6 @@ void main()
         {7, 2, 11},
     };
 
-    struct VertexPN
-    {
-        glm::vec3 pos;
-        glm::vec3 normal;
-    };
-
     static void appendSpherePatch(
         const glm::vec3 &p1,
         const glm::vec3 &p2,
@@ -1708,6 +1705,9 @@ void main()
 
     void DrawstuffApp::buildCylinderMeshForQuality(int quality, Mesh &dstMesh)
     {
+        using std::sin;
+        using std::cos;
+
         // --- 1. quality → 分割数のマッピング ---
         int q = quality;
         if (q < 1)
@@ -1880,7 +1880,7 @@ void main()
 
     // 単位カプセル: 半径1, 平行部長さ2, 軸Z
     // 元の drawCapsuleCenteredX と同じ分割ロジックでメッシュを作る
-    void buildUnitCapsuleMesh(Mesh &dstMesh)
+    static void buildUnitCapsuleMesh(Mesh &dstMesh)
     {
         using std::cos;
         using std::sin;
@@ -1908,8 +1908,8 @@ void main()
         const float r = radius;
 
         const float a = 2.0f * static_cast<float>(M_PI) / static_cast<float>(n);
-        const float sa = sin(a);
-        const float ca = cos(a);
+        const float sa = std::sin(a);
+        const float ca = std::cos(a);
 
         // =================================================
         // 1. 円筒本体: 元の「draw cylinder body」をメッシュ化
@@ -2165,6 +2165,76 @@ void main()
         glBindVertexArray(0);
     }
 
+    void DrawstuffApp::initTriangleMesh()
+    {
+        glGenVertexArrays(1, &meshTriangle_.vao);
+        glBindVertexArray(meshTriangle_.vao);
+
+        // VBO
+        glGenBuffers(1, &meshTriangle_.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, meshTriangle_.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     3 * sizeof(VertexPN),
+                     nullptr,
+                     GL_DYNAMIC_DRAW);
+
+        // ★ VAO を bind した「状態」で EBO を bind することが重要
+        glGenBuffers(1, &meshTriangle_.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, meshTriangle_.ebo);
+        uint32_t indices[3] = {0, 1, 2};
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     sizeof(indices),
+                     indices,
+                     GL_STATIC_DRAW);
+
+        // 属性
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            (void *)offsetof(VertexPN, pos));
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            (void *)offsetof(VertexPN, normal));
+
+        glBindVertexArray(0);
+
+        meshTriangle_.indexCount = 3;
+    }
+
+    void DrawstuffApp::initTrianglesBatchMesh()
+    {
+        glGenVertexArrays(1, &meshTrianglesBatch_.vao);
+        glBindVertexArray(meshTrianglesBatch_.vao);
+
+        glGenBuffers(1, &meshTrianglesBatch_.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, meshTrianglesBatch_.vbo);
+
+        trianglesBatchCapacity_ = 0;
+        // ここではまだ glBufferData はしない（最初の呼び出し時にサイズ決定）
+
+        // インデックスは使わない
+        meshTrianglesBatch_.ebo = 0;
+        meshTrianglesBatch_.indexCount = 0;
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        glBindVertexArray(0);
+    }
+
     void DrawstuffApp::createPrimitiveMeshes()
     {
         // 頂点配列: position + normal (+ texcoord)
@@ -2279,6 +2349,9 @@ void main()
 
         // --- ここから capsule 用メッシュ生成 ---
         buildUnitCapsuleMesh(meshCapsule_);
+
+        initTriangleMesh();
+        initTrianglesBatchMesh();
     }
 
     void DrawstuffApp::drawSky(const float view_xyz[3])
@@ -2557,64 +2630,85 @@ void main()
         glUseProgram(0);
     }
 
-    void DrawstuffApp::drawUnitSphere()
+    void DrawstuffApp::drawTriangleCore(const glm::vec3 p[3],
+                                        const glm::vec3 &N,
+                                        const glm::mat4 &model,
+                                        const bool solid)
     {
-        // 原点中心，半径1の球（単位球）を描画
-        // icosahedron data for an icosahedron of radius 1.0
-#define ICX 0.525731112119133606f
-#define ICZ 0.850650808352039932f
-        static GLfloat idata[12][3] = {
-            {-ICX, 0, ICZ},
-            {ICX, 0, ICZ},
-            {-ICX, 0, -ICZ},
-            {ICX, 0, -ICZ},
-            {0, ICZ, ICX},
-            {0, ICZ, -ICX},
-            {0, -ICZ, ICX},
-            {0, -ICZ, -ICX},
-            {ICZ, ICX, 0},
-            {-ICZ, ICX, 0},
-            {ICZ, -ICX, 0},
-            {-ICZ, -ICX, 0}};
+        VertexPN tri[3];
+        tri[0].pos = p[0];
+        tri[1].pos = p[1];
+        tri[2].pos = p[2];
+        tri[0].normal = N;
+        tri[1].normal = N;
+        tri[2].normal = N;
 
-        static int index[20][3] = {
-            {0, 4, 1},
-            {0, 9, 4},
-            {9, 5, 4},
-            {4, 5, 8},
-            {4, 8, 1},
-            {8, 10, 1},
-            {8, 3, 10},
-            {5, 3, 8},
-            {5, 2, 3},
-            {2, 7, 3},
-            {7, 10, 3},
-            {7, 6, 10},
-            {7, 11, 6},
-            {11, 0, 6},
-            {0, 1, 6},
-            {6, 1, 10},
-            {9, 0, 11},
-            {9, 11, 2},
-            {9, 2, 5},
-            {7, 2, 11},
-        };
+        // 三角形メッシュの VBO を更新
+        glBindBuffer(GL_ARRAY_BUFFER, meshTriangle_.vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(tri), tri);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-        static GLuint listnum = 0;
-        if (listnum == 0)
-        {
-            listnum = glGenLists(1);
-            glNewList(listnum, GL_COMPILE);
-            glBegin(GL_TRIANGLES);
-            for (int i = 0; i < 20; i++)
-            {
-                drawPatch(&idata[index[i][2]][0], &idata[index[i][1]][0],
-                          &idata[index[i][0]][0], sphere_quality);
-            }
-            glEnd();
-            glEndList();
+        // あとは他のプリミティブと同じ「基本パイプライン」に投げる
+        if (!solid) {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         }
-        glCallList(listnum);
+        drawMeshBasic(meshTriangle_, model, current_color);
+        if (!solid) {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        // 影（Core パス）
+        drawShadowMesh(meshTriangle_, model);
+    }
+
+    void DrawstuffApp::drawTrianglesBatch(
+        const std::vector<VertexPN> &verts,
+        const glm::mat4 &model,
+        const bool solid)
+    {
+        if (verts.empty())
+            return;
+
+        const std::size_t needed = verts.size();
+
+        glBindBuffer(GL_ARRAY_BUFFER, meshTrianglesBatch_.vbo);
+
+        // 必要ならバッファサイズを拡張
+        if (needed > trianglesBatchCapacity_)
+        {
+            trianglesBatchCapacity_ = needed;
+            glBufferData(GL_ARRAY_BUFFER,
+                         trianglesBatchCapacity_ * sizeof(VertexPN),
+                         nullptr,
+                         GL_DYNAMIC_DRAW);
+        }
+
+        // 実データを先頭から詰める
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        0,
+                        needed * sizeof(VertexPN),
+                        verts.data());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        meshTrianglesBatch_.indexCount =
+            static_cast<GLsizei>(needed); // 頂点数として使う
+
+        // 本体
+        if (!solid)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        }
+        drawMeshBasic(meshTrianglesBatch_, model, current_color);
+        if (!solid)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        // 影
+        if (use_shadows && solid)
+        {
+            drawShadowMesh(meshTrianglesBatch_, model);
+        }
     }
 
     void DrawstuffApp::startGraphics(const int width, const int height, const dsFunctions *fn)
