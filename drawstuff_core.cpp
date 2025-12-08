@@ -385,38 +385,80 @@ namespace ds_internal
 
         // ライティング付きシェーダ
         static const char *vsSrc = R"GLSL(
-        #version 330 core
-        layout(location = 0) in vec3 aPos;
-        layout(location = 1) in vec3 aNormal;
+// basic.vs
+#version 330 core
 
-        uniform mat4 uMVP;
-        uniform mat4 uModel;
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
 
-        out vec3 vNormal;
+uniform mat4 uMVP;
+uniform mat4 uModel;
 
-        void main()
-        {
-            gl_Position = uMVP * vec4(aPos, 1.0);
-            vNormal = mat3(uModel) * aNormal;
-        }
+out vec3 vNormal;
+out vec3 vWorldPos;
+
+void main()
+{
+    vec4 worldPos4 = uModel * vec4(aPos, 1.0);
+    vWorldPos      = worldPos4.xyz;
+
+    // 非一様スケールがきつい場合は本当は逆転置行列が必要だが、
+    // 今回は簡易版として mat3(uModel) を使用
+    vNormal = mat3(uModel) * aNormal;
+
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
     )GLSL";
 
         static const char *fsSrc = R"GLSL(
-        #version 330 core
-        in vec3 vNormal;
+// basic.fs
+#version 330 core
 
-        uniform vec4 uColor;
+in vec3 vNormal;
+in vec3 vWorldPos;
 
-        out vec4 FragColor;
+uniform vec4      uColor;
+uniform sampler2D uTex;
+uniform bool      uUseTex;
+uniform float     uTexScale;   // 例: 0.5f など
 
-        void main()
-        {
-            vec3 N = normalize(vNormal);
-            // 適当な平行光源
-            float diff = max(dot(N, normalize(vec3(0.2, 0.5, 1.0))), 0.0);
-            vec3 rgb = uColor.rgb * (0.3 + 0.7 * diff);
-            FragColor = vec4(rgb, uColor.a);
-        }
+uniform vec3 uLightDir; // 光源方向をシェーダ内で指定
+
+out vec4 FragColor;
+
+void main()
+{
+    vec3 N = normalize(vNormal);
+
+    // 簡単なディフューズライティング
+    float diff = max(dot(N, uLightDir), 0.0);
+
+    vec3 base = uColor.rgb;
+
+    if (uUseTex) {
+        // トライプラナー重み
+        vec3 an  = abs(N);
+        float sum = an.x + an.y + an.z + 1e-5;
+        vec3 w   = an / sum;
+
+        // 各軸方向からの投影座標
+        vec2 uvX = vWorldPos.yz * uTexScale; // X向きの面 → YZ平面
+        vec2 uvY = vWorldPos.xz * uTexScale; // Y向きの面 → XZ平面
+        vec2 uvZ = vWorldPos.xy * uTexScale; // Z向きの面 → XY平面
+
+        vec3 texX = texture(uTex, uvX).rgb;
+        vec3 texY = texture(uTex, uvY).rgb;
+        vec3 texZ = texture(uTex, uvZ).rgb;
+
+        vec3 texColor = w.x * texX + w.y * texY + w.z * texZ;
+
+        base *= texColor;
+    }
+
+    // vec3 rgb = base * (0.3 + 0.7 * diff);
+    vec3 rgb = base * (0.2 + 0.4 * diff);
+    FragColor = vec4(rgb, uColor.a);
+}
     )GLSL";
 
         GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
@@ -440,6 +482,48 @@ namespace ds_internal
         uMVP_ = glGetUniformLocation(programBasic_, "uMVP");
         uModel_ = glGetUniformLocation(programBasic_, "uModel");
         uColor_ = glGetUniformLocation(programBasic_, "uColor");
+        uUseTex_ = glGetUniformLocation(programBasic_, "uUseTex");
+        uTex_ = glGetUniformLocation(programBasic_, "uTex");
+        uTexScale_ = glGetUniformLocation(programBasic_, "uTexScale");
+    }
+
+    void DrawstuffApp::drawMeshBasic(
+        const Mesh &mesh,
+        const glm::mat4 &model,
+        const glm::vec4 &color)
+    {
+        glm::mat4 shadowMvp = proj_ * view_ * model;
+        uLightDir_ = glGetUniformLocation(programBasic_, "uLightDir");
+
+        glUseProgram(programBasic_);
+        glUniform3f(uLightDir_, shadowLightDir_.x, shadowLightDir_.y, shadowLightDir_.z);
+        glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(shadowMvp));
+        glUniform4fv(uColor_, 1, glm::value_ptr(color));
+        glUniformMatrix4fv(uModel_, 1, GL_FALSE, glm::value_ptr(model));
+
+        // テクスチャスケール（模様の大きさ）適当に調整
+        glUniform1f(uTexScale_, 0.5f); // 0.1〜2.0 くらいを試して好みで
+
+        // ★ テクスチャの ON/OFF
+        if (use_textures && texture[DS_WOOD]) // 例として木目テクスチャを使う場合
+        {
+            glUniform1i(uUseTex_, GL_TRUE);
+
+            glActiveTexture(GL_TEXTURE0);
+            texture[DS_WOOD]->bind(0); // あるいは glBindTexture(GL_TEXTURE_2D, ...)
+            glUniform1i(uTex_, 0);     // sampler2D uTex はテクスチャユニット0を参照
+        }
+        else
+        {
+            glUniform1i(uUseTex_, GL_FALSE);
+        }
+
+        glBindVertexArray(mesh.vao);
+        glDrawElements(GL_TRIANGLES, mesh.indexCount,
+                       GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
+
+        glUseProgram(0);
     }
 
     void DrawstuffApp::initGroundProgram()
@@ -1619,6 +1703,178 @@ void main()
         glBindVertexArray(0);
     }
 
+    void DrawstuffApp::buildCylinderMeshForQuality(int quality, Mesh &dstMesh)
+    {
+        // --- 1. quality → 分割数のマッピング ---
+        int q = quality;
+        if (q < 1)
+            q = 1;
+        if (q > 3)
+            q = 3;
+
+        int slices;
+        switch (q)
+        {
+        case 1:
+            slices = 12;
+            break;
+        case 2:
+            slices = 24;
+            break; // 旧 n=24 と対応
+        default:
+            slices = 48;
+            break;
+        }
+
+        // --- 2. ジオメトリ生成（単位円柱：半径1, z∈[-0.5,0.5]） ---
+        std::vector<VertexPN> vertices;
+        std::vector<uint32_t> indices;
+
+        const float r = 1.0f;
+        const float halfLen = 0.5f;
+        const int n = slices;
+        const float a = 2.0f * static_cast<float>(M_PI) / static_cast<float>(n);
+
+        // 2-1. 側面（サイド）
+        //
+        // 軸: Z
+        // 円周: X-Y 平面
+        //
+        for (int i = 0; i <= n; ++i)
+        {
+            float theta = a * static_cast<float>(i);
+            float nx = std::cos(theta); // 半径方向 X
+            float ny = std::sin(theta); // 半径方向 Y
+
+            glm::vec3 normal(nx, ny, 0.0f);
+
+            // 上側 (+Z)
+            vertices.push_back({glm::vec3(r * nx, r * ny, +halfLen),
+                                normal});
+
+            // 下側 (-Z)
+            vertices.push_back({glm::vec3(r * nx, r * ny, -halfLen),
+                                normal});
+        }
+
+        // 側面インデックス
+        // i番目スライスの2頂点:
+        //   top   : 2*i
+        //   bottom: 2*i + 1
+        for (int i = 0; i < n; ++i)
+        {
+            uint32_t iTop0 = 2 * i;
+            uint32_t iBot0 = 2 * i + 1;
+            uint32_t iTop1 = 2 * (i + 1);
+            uint32_t iBot1 = 2 * (i + 1) + 1;
+
+            // 三角形1: top0, bot0, top1
+            indices.push_back(iTop0);
+            indices.push_back(iBot0);
+            indices.push_back(iTop1);
+
+            // 三角形2: bot0, bot1, top1
+            indices.push_back(iBot0);
+            indices.push_back(iBot1);
+            indices.push_back(iTop1);
+        }
+
+        // 2-2. 上キャップ (+Z)
+        uint32_t topCenterIndex = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            glm::vec3(0.0f, 0.0f, +halfLen),
+            glm::vec3(0.0f, 0.0f, +1.0f) // 法線 +Z
+        });
+
+        uint32_t topRingStart = static_cast<uint32_t>(vertices.size());
+        for (int i = 0; i <= n; ++i)
+        {
+            float theta = a * static_cast<float>(i);
+            float x = std::cos(theta);
+            float y = std::sin(theta);
+
+            vertices.push_back({glm::vec3(r * x, r * y, +halfLen),
+                                glm::vec3(0.0f, 0.0f, +1.0f)});
+        }
+
+        for (int i = 0; i < n; ++i)
+        {
+            uint32_t i0 = topCenterIndex;
+            uint32_t i1 = topRingStart + i;
+            uint32_t i2 = topRingStart + i + 1;
+
+            indices.push_back(i0);
+            indices.push_back(i1);
+            indices.push_back(i2);
+        }
+
+        // 2-3. 下キャップ (-Z)
+        uint32_t bottomCenterIndex = static_cast<uint32_t>(vertices.size());
+        vertices.push_back({
+            glm::vec3(0.0f, 0.0f, -halfLen),
+            glm::vec3(0.0f, 0.0f, -1.0f) // 法線 -Z
+        });
+
+        uint32_t bottomRingStart = static_cast<uint32_t>(vertices.size());
+        for (int i = 0; i <= n; ++i)
+        {
+            float theta = a * static_cast<float>(i);
+            float x = std::cos(theta);
+            float y = std::sin(theta);
+
+            vertices.push_back({glm::vec3(r * x, r * y, -halfLen),
+                                glm::vec3(0.0f, 0.0f, -1.0f)});
+        }
+
+        // 下側は外から見て CCW になるように頂点順を反転
+        for (int i = 0; i < n; ++i)
+        {
+            uint32_t i0 = bottomCenterIndex;
+            uint32_t i1 = bottomRingStart + i + 1;
+            uint32_t i2 = bottomRingStart + i;
+
+            indices.push_back(i0);
+            indices.push_back(i1);
+            indices.push_back(i2);
+        }
+
+        // --- 3. VAO / VBO / EBO へアップロード（sphere と同様） ---
+        glGenVertexArrays(1, &dstMesh.vao);
+        glBindVertexArray(dstMesh.vao);
+
+        glGenBuffers(1, &dstMesh.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, dstMesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     vertices.size() * sizeof(VertexPN),
+                     vertices.data(),
+                     GL_STATIC_DRAW);
+
+        glGenBuffers(1, &dstMesh.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dstMesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        // layout(location = 0) vec3 aPos;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        // layout(location = 1) vec3 aNormal;
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        dstMesh.indexCount = static_cast<GLsizei>(indices.size());
+
+        glBindVertexArray(0);
+    }
+
     void DrawstuffApp::createPrimitiveMeshes()
     {
         // 頂点配列: position + normal (+ texcoord)
@@ -1725,6 +1981,11 @@ void main()
         buildSphereMeshForQuality(1, meshSphere_[1]);
         buildSphereMeshForQuality(2, meshSphere_[2]);
         buildSphereMeshForQuality(3, meshSphere_[3]);
+
+        // --- ここから cylinder 用メッシュ生成 ---
+        buildCylinderMeshForQuality(1, meshCylinder_[1]);
+        buildCylinderMeshForQuality(2, meshCylinder_[2]);
+        buildCylinderMeshForQuality(3, meshCylinder_[3]);
     }
 
     void DrawstuffApp::drawSky(const float view_xyz[3])

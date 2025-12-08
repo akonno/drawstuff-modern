@@ -143,7 +143,7 @@ namespace ds_internal
         // 球などの表示品質設定
         void setSphereQuality(const int n) { sphere_quality = n; }
         void setCapsuleQuality(const int n) { capsule_quality = n; }
-        void setCappedCylinderQuality(const int n) { capped_cylinder_quality = n; }
+        void setCylinderQuality(const int n) { cylinder_quality = n; }
         void setDrawMode(const int mode) { draw_mode = mode; }
         void setWriteFrames(bool wf) { writeframes = wf; }
         void toggleWriteFrames() { writeframes = !writeframes; }
@@ -271,6 +271,31 @@ namespace ds_internal
             }
         }
 
+#if 1
+        template <typename T>
+        void drawCylinder(const T pos[3], const T R[12],
+                        const T length, const T radius)
+        {
+            static_assert(
+                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                "T must be float or double");
+
+            if (current_state != SIM_STATE_DRAWING)
+                fatalError("drawing function called outside simulation loop");
+
+            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+
+            const T sides[3] = {radius, radius, length};
+            glm::mat4 model = buildModelMatrix(pos, R, sides);
+
+            // 本体（Core パス）
+            drawMeshBasic(meshCylinder_[cylinder_quality], model, current_color);
+            // 影（Core パス）
+            drawShadowMesh(meshCylinder_[cylinder_quality], model);
+        }
+#endif
+
+#if 0
         template <typename T>
         void drawCylinder(const T pos[3], const T R[12],
                                         const T length, const T radius)
@@ -295,6 +320,8 @@ namespace ds_internal
                 glDepthRange(0, 1);
             }
         }
+#endif
+
         template <typename T>
         void drawTriangle(const T pos[3], const T R[12],
                           const T *v0, const T *v1,
@@ -418,6 +445,10 @@ namespace ds_internal
         GLint uMVP_ = -1;
         GLint uModel_ = -1;
         GLint uColor_ = -1;
+        GLint uUseTex_ = -1;
+        GLint uTex_ = -1;
+        GLfloat uTexScale_ = -1;
+        GLint uLightDir_ = -1;
 
         // ピラミッド用 VAO/VBO
         GLuint vaoPyramid_ = 0;
@@ -510,6 +541,7 @@ namespace ds_internal
         void initMotionModel();
         void applyViewpointToGL();
         void buildSphereMeshForQuality(int quality, Mesh &dstMesh);
+        void buildCylinderMeshForQuality(int quality, Mesh &dstMesh);
         void createPrimitiveMeshes();
         void setupDrawingMode();
         void setShadowDrawingMode();
@@ -525,21 +557,7 @@ namespace ds_internal
         void drawMeshBasic(
             const Mesh &mesh,
             const glm::mat4 &model,
-            const glm::vec4 &color)
-        {
-            glm::mat4 shadowMvp = proj_ * view_ * model;
-
-            glUseProgram(programBasic_);
-            glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(shadowMvp));
-            glUniform4fv(uColor_, 1, glm::value_ptr(color));
-
-            glBindVertexArray(mesh.vao);
-            glDrawElements(GL_TRIANGLES, mesh.indexCount,
-                           GL_UNSIGNED_INT, nullptr);
-            glBindVertexArray(0);
-
-            glUseProgram(0);
-        }
+            const glm::vec4 &color);
 
         void drawShadowMesh(
             const Mesh &mesh,
@@ -752,7 +770,7 @@ namespace ds_internal
             int i, j;
             T tmp, nx, ny, nz, start_nx, start_ny, a, ca, sa;
             // number of sides to the cylinder (divisible by 4):
-            const int n = capped_cylinder_quality * 4;
+            const int n = capsule_quality * 4;
 
             const T l = length * 0.5f;
             const T r = radius;
