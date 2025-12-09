@@ -222,9 +222,11 @@ namespace ds_internal
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
-
+            if (current_state != SIM_STATE_DRAWING) {
+                std::string s = "drawBox: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
             setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
 
             glm::mat4 model = buildModelMatrix(pos, R, sides);
@@ -245,7 +247,11 @@ namespace ds_internal
                 "T must be float or double");
 
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
+            {
+                std::string s = "drawSphere: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
 
             setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
 
@@ -267,7 +273,11 @@ namespace ds_internal
                          const T length, const T radius)
         {
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
+            {
+                std::string s = "drawCapsule: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
 
             setupDrawingMode();
 
@@ -327,7 +337,11 @@ namespace ds_internal
                 "T must be float or double");
 
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
+            {
+                std::string s = "drawCylinder: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
 
             setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
 
@@ -349,7 +363,11 @@ namespace ds_internal
                 "T must be float or double");
 
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
+            {
+                std::string s = "drawTriangles: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
 
             setupDrawingMode();
 
@@ -402,7 +420,11 @@ namespace ds_internal
                 "T must be float or double");
 
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
+            {
+                std::string s = "drawTriangle: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
 
             setupDrawingMode();
 
@@ -427,25 +449,99 @@ namespace ds_internal
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            // 旧 dsDrawConvex から OpenGL 呼び出し部分を移植
             if (current_state != SIM_STATE_DRAWING)
-                fatalError("drawing function called outside simulation loop");
-            setupDrawingMode();
-            glShadeModel(GL_FLAT);
-            setTransform(pos, R);
-            drawIndexedConvexPolyhedron(_planes, _planecount, _points, _pointcount, _polygons);
-            glPopMatrix();
-            if (use_shadows)
             {
-                setShadowDrawingMode();
-                setShadowTransform();
-                setTransform(pos, R);
-                drawIndexedConvexPolyhedron(_planes, _planecount, _points, _pointcount, _polygons);
-                glPopMatrix();
-                glPopMatrix();
-                glDepthRange(0, 1);
+                std::string s = "drawConvex: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
             }
+
+            // ライティング・テクスチャ等の共通設定
+            setupDrawingMode();
+
+            // Convex はローカル座標で定義されているので scale=1
+            const T scaleXYZ[3] = {static_cast<T>(1.0),
+                                   static_cast<T>(1.0),
+                                   static_cast<T>(1.0)};
+            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+
+            // ---- Convex → 三角形バッチへの変換 ----
+
+            std::vector<VertexPN> verts;
+
+            // 大雑把に確保（顔数×平均頂点数を3〜4と見積もっておく）
+            if (_planecount > 0)
+            {
+                verts.reserve(static_cast<std::size_t>(_planecount) * 6u);
+            }
+
+            auto getPoint = [&](unsigned int idx) -> glm::vec3
+            {
+                // 安全のため範囲チェックするなら assert 等を入れてもよい
+                const T *p = _points + static_cast<std::size_t>(idx) * 3u;
+                return glm::vec3(
+                    static_cast<float>(p[0]),
+                    static_cast<float>(p[1]),
+                    static_cast<float>(p[2]));
+            };
+
+            unsigned int polyindex = 0;
+
+            for (unsigned int i = 0; i < _planecount; ++i)
+            {
+                if (polyindex >= std::numeric_limits<unsigned int>::max())
+                    break; // 万が一の安全弁
+
+                const unsigned int pointcount = _polygons[polyindex++];
+                if (pointcount < 3)
+                {
+                    // 面にならないのでスキップ（インデックスだけ進める）
+                    polyindex += pointcount;
+                    continue;
+                }
+
+                // この面の法線（_planes の i 番目）
+                glm::vec3 N(
+                    static_cast<float>(_planes[i * 4 + 0]),
+                    static_cast<float>(_planes[i * 4 + 1]),
+                    static_cast<float>(_planes[i * 4 + 2]));
+                N = glm::normalize(N);
+
+                // この面の頂点インデックス列は _polygons[polyindex ... polyindex+pointcount-1]
+                const unsigned int idx0 = _polygons[polyindex];
+                const glm::vec3 p0 = getPoint(idx0);
+
+                // Convex なので三角形ファンで安全に分割できる：
+                // (p0, p_j, p_{j+1})  j = 1 .. pointcount-2
+                for (unsigned int j = 1; j + 1 < pointcount; ++j)
+                {
+                    const unsigned int idx1 = _polygons[polyindex + j];
+                    const unsigned int idx2 = _polygons[polyindex + j + 1];
+
+                    const glm::vec3 p1 = getPoint(idx1);
+                    const glm::vec3 p2 = getPoint(idx2);
+
+                    verts.push_back(VertexPN{p0, N});
+                    verts.push_back(VertexPN{p1, N});
+                    verts.push_back(VertexPN{p2, N});
+                }
+
+                // この面の頂点インデックスをすべて消費
+                polyindex += pointcount;
+            }
+
+            // ---- 実際の描画（塗り＋影） ----
+
+            // convex は基本「塗り潰し」想定なので solid=true
+            const bool solid = true;
+            drawTrianglesBatch(verts, model, solid);
+
+            // drawTrianglesBatch 内で
+            //   - drawMeshBasic(meshTrianglesBatch_, model, current_color)
+            //   - if (use_shadows && solid) drawShadowMesh(...)
+            // を呼ぶ想定なので、ここで影パスを二重に呼ぶ必要はありません。
         }
+
         template <typename T>
         void drawLine(const T pos1[3], const T pos2[3])
         {
@@ -453,19 +549,31 @@ namespace ds_internal
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            // 旧 dsDrawLine から OpenGL 呼び出し部分を移植
+            if (current_state != SIM_STATE_DRAWING)
+            {
+                std::string s = "drawLine: drawing function called outside simulation loop";
+                s += " (current_state=" + std::to_string(current_state) + ")";
+                fatalError(s.c_str());
+            }
+
+            // 共通の描画状態（programBasic_, uColor, ライティング etc.）
             setupDrawingMode();
-            glColor4f(static_cast<float>(current_color[0]), static_cast<float>(current_color[1]), static_cast<float>(current_color[2]), static_cast<float>(current_color[3]));
-            drawLineLocalImmediate<T>(pos1, pos2);
+
+            // glColor4f は Core では使えないので、
+            // current_color は setupDrawingMode() or シェーダ側の uniform 経由で反映されている前提。
+            // もし色だけ別にしたい場合はここで uColor を上書き。
+
+            drawLineCore(pos1, pos2);
 
             if (use_shadows)
             {
+                // 既存の影用パスに乗る
                 setShadowDrawingMode();
                 setShadowTransform();
 
-                drawLineLocalImmediate<T>(pos1, pos2);
+                drawLineCore(pos1, pos2);
 
-                glPopMatrix();
+                glPopMatrix(); // 既存の影行列スタック処理に合わせる
                 glDepthRange(0, 1);
             }
         }
@@ -494,6 +602,8 @@ namespace ds_internal
         Mesh meshCapsuleBody_, meshCapsuleCapTop_, meshCapsuleCapBottom_; // カプセル用メッシュ
         Mesh meshTriangle_;
         Mesh meshTrianglesBatch_;
+        Mesh meshLine_;
+        Mesh meshPyramid_;
 
         std::size_t trianglesBatchCapacity_ = 0;
 
@@ -569,6 +679,10 @@ namespace ds_internal
         // 影描画ヘルパ（後で中身を実装）
         // void drawShadowPrimitive(PrimitiveType type, const glm::mat4 &model);
 
+        void initLineMesh();
+
+        void initPyramidMesh();
+        
         // 必要ならカメラパラメータも保存
         float cam_x_ = 0.0f, cam_y_ = 0.0f, cam_z_ = 0.0f;
         float cam_h_ = 0.0f, cam_p_ = 0.0f, cam_r_ = 0.0f;
@@ -730,48 +844,6 @@ namespace ds_internal
         }
 
         template <typename T>
-        void drawIndexedConvexPolyhedron(const T *_planes, const unsigned int _planecount,
-                                         const T *_points, const unsigned int _pointcount,
-                                         const unsigned int *_polygons)
-        {
-            unsigned int polyindex = 0;
-            for (unsigned int i = 0; i < _planecount; ++i)
-            {
-                unsigned int pointcount = _polygons[polyindex];
-                polyindex++;
-                glBegin(GL_POLYGON);
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glNormal3f(_planes[(i * 4) + 0],
-                               _planes[(i * 4) + 1],
-                               _planes[(i * 4) + 2]);
-                }
-                else
-                {
-                    glNormal3d(_planes[(i * 4) + 0],
-                               _planes[(i * 4) + 1],
-                               _planes[(i * 4) + 2]);
-                }
-                for (unsigned int j = 0; j < pointcount; ++j)
-                {
-                    if constexpr (std::is_same<T, float>::value)
-                    {
-                        glVertex3f(_points[_polygons[polyindex] * 3],
-                                   _points[(_polygons[polyindex] * 3) + 1],
-                                   _points[(_polygons[polyindex] * 3) + 2]);
-                    }
-                    else
-                    {
-                        glVertex3d(_points[_polygons[polyindex] * 3],
-                                   _points[(_polygons[polyindex] * 3) + 1],
-                                   _points[(_polygons[polyindex] * 3) + 2]);
-                    }
-                    polyindex++;
-                }
-                glEnd();
-            }
-        }
-        template <typename T>
         void drawSphereShadow(const T px, const T py, const T pz,
                               const T radius)
         {
@@ -856,28 +928,53 @@ namespace ds_internal
         }
 
         template <typename T>
-        void drawLineLocalImmediate(const T pos1[3], const T pos2[3])
+        void drawLineCore(const T pos1[3], const T pos2[3])
         {
             static_assert(
                 std::is_same<T, float>::value || std::is_same<T, double>::value,
                 "T must be float or double");
 
-            // 旧 drawLine を移植
-            glDisable(GL_LIGHTING);
-            glLineWidth(2);
-            glShadeModel(GL_FLAT);
-            glBegin(GL_LINES);
-            if constexpr (std::is_same<T, float>::value)
-            {
-                glVertex3f(pos1[0], pos1[1], pos1[2]);
-                glVertex3f(pos2[0], pos2[1], pos2[2]);
-            }
-            else if constexpr (std::is_same<T, double>::value)
-            {
-                glVertex3d(pos1[0], pos1[1], pos1[2]);
-                glVertex3d(pos2[0], pos2[1], pos2[2]);
-            }
-            glEnd();
+            initLineMesh();
+
+            VertexPN verts[2];
+
+            // 位置はそのまま「ワールド座標」として使う
+            verts[0].pos = glm::vec3(
+                static_cast<float>(pos1[0]),
+                static_cast<float>(pos1[1]),
+                static_cast<float>(pos1[2]));
+            verts[1].pos = glm::vec3(
+                static_cast<float>(pos2[0]),
+                static_cast<float>(pos2[1]),
+                static_cast<float>(pos2[2]));
+
+            // 法線は適当でよい（照明にほぼ影響しないし、A項で最低限明るくなる）
+            glm::vec3 dir = verts[1].pos - verts[0].pos;
+            glm::vec3 N = glm::length(dir) > 0.0f
+                              ? glm::normalize(dir)
+                              : glm::vec3(0.0f, 1.0f, 0.0f);
+
+            verts[0].normal = N;
+            verts[1].normal = N;
+
+            glBindBuffer(GL_ARRAY_BUFFER, meshLine_.vbo);
+            glBufferSubData(GL_ARRAY_BUFFER,
+                            0,
+                            sizeof(verts),
+                            verts);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            meshLine_.indexCount = 2; // 安心のため更新
+
+            glBindVertexArray(meshLine_.vao);
+
+            glLineWidth(2.0f);
+
+            // ここでは primitive type だけ LINES に切り替える
+            // シェーダは programBasic_ / programShadow_ がすでに bind 済み前提
+            glDrawArrays(GL_LINES, 0, meshLine_.indexCount);
+
+            glBindVertexArray(0);
         }
     };
 

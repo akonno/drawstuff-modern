@@ -533,10 +533,21 @@ void main()
         {
             glUniform1i(uUseTex_, GL_FALSE);
         }
-
         glBindVertexArray(mesh.vao);
-        glDrawElements(GL_TRIANGLES, mesh.indexCount,
-                       GL_UNSIGNED_INT, nullptr);
+        if (mesh.ebo != 0)
+        {
+            glDrawElements(GL_TRIANGLES,
+                           mesh.indexCount,
+                           GL_UNSIGNED_INT,
+                           nullptr);
+        }
+        else
+        {
+            // インデックスなし（VBOを先頭から indexCount 頂点ぶん）
+            glDrawArrays(GL_TRIANGLES,
+                         0,
+                         mesh.indexCount);
+        }
         glBindVertexArray(0);
 
         glUseProgram(0);
@@ -958,8 +969,13 @@ void main()
         }
 
         glBindVertexArray(mesh.vao);
-        glDrawElements(GL_TRIANGLES, mesh.indexCount,
-                       GL_UNSIGNED_INT, nullptr);
+        if (mesh.ebo != 0) {
+            glDrawElements(GL_TRIANGLES, mesh.indexCount,
+                           GL_UNSIGNED_INT, nullptr);
+        }
+        else {
+            glDrawArrays(GL_TRIANGLES, 0, mesh.indexCount);
+        }
         glBindVertexArray(0);
 
         glDisable(GL_POLYGON_OFFSET_FILL);
@@ -2257,6 +2273,112 @@ void main()
 
         glBindVertexArray(0);
     }
+    void DrawstuffApp::initLineMesh()
+    {
+        glGenVertexArrays(1, &meshLine_.vao);
+        glBindVertexArray(meshLine_.vao);
+
+        glGenBuffers(1, &meshLine_.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, meshLine_.vbo);
+
+        // ラインなので頂点は常に2つ分だけあればよい
+        glBufferData(GL_ARRAY_BUFFER,
+                     2 * sizeof(VertexPN),
+                     nullptr,
+                     GL_DYNAMIC_DRAW);
+
+        // インデックスは使わない
+        meshLine_.ebo = 0;
+        meshLine_.indexCount = 2;
+
+        // layout(location=0) pos, location=1 normal
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    void DrawstuffApp::initPyramidMesh()
+    {
+        if (meshPyramid_.vao != 0)
+        {
+            return; // すでに初期化済み
+        }
+
+        // 単位ピラミッド（中心原点・高さ1, 底面±1）を作る
+        constexpr float k = 1.0f;
+        const glm::vec3 top(0.0f, 0.0f, k);
+        const glm::vec3 p1(-k, -k, 0.0f);
+        const glm::vec3 p2(k, -k, 0.0f);
+        const glm::vec3 p3(k, k, 0.0f);
+        const glm::vec3 p4(-k, k, 0.0f);
+
+        glm::vec3 n01 = glm::normalize(glm::vec3(0.0f, -1.0f, 1.0f));
+        glm::vec3 n12 = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
+        glm::vec3 n23 = glm::normalize(glm::vec3(0.0f, 1.0f, 1.0f));
+        glm::vec3 n30 = glm::normalize(glm::vec3(-1.0f, 0.0f, 1.0f));
+
+        // 面ごとに頂点を重複させた 12 頂点
+        std::array<VertexPN, 12> verts;
+
+        // face 0: top, p1, p2
+        verts[0] = {top, n01};
+        verts[1] = {p1, n01};
+        verts[2] = {p2, n01};
+        // face 1: top, p2, p3
+        verts[3] = {top, n12};
+        verts[4] = {p2, n12};
+        verts[5] = {p3, n12};
+        // face 2: top, p3, p4
+        verts[6] = {top, n23};
+        verts[7] = {p3, n23};
+        verts[8] = {p4, n23};
+        // face 3: top, p4, p1
+        verts[9] = {top, n30};
+        verts[10] = {p4, n30};
+        verts[11] = {p1, n30};
+
+        glGenVertexArrays(1, &meshPyramid_.vao);
+        glGenBuffers(1, &meshPyramid_.vbo);
+
+        glBindVertexArray(meshPyramid_.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, meshPyramid_.vbo);
+
+        glBufferData(GL_ARRAY_BUFFER,
+                     sizeof(verts),
+                     verts.data(),
+                     GL_STATIC_DRAW);
+
+        // インデックスは使わず glDrawArrays する
+        meshPyramid_.ebo = 0;
+        meshPyramid_.indexCount = static_cast<GLsizei>(verts.size());
+
+        // layout(location = 0) position
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        // layout(location = 1) normal
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
 
     void DrawstuffApp::createPrimitiveMeshes()
     {
@@ -2377,6 +2499,9 @@ void main()
 
         initTriangleMesh();
         initTrianglesBatchMesh();
+
+        initLineMesh();
+        initPyramidMesh();
     }
 
     void DrawstuffApp::drawSky(const float view_xyz[3])
@@ -2495,127 +2620,54 @@ void main()
 
     void DrawstuffApp::drawPyramidGrid()
     {
-        // まずは従来通りのステートセット（必要に応じて整理）
+        // 深度テストは有効にしておく
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
 
-        // ---- ここから Core33 用実装 ----
-        // 固定機能のライトは core では使えないので、シェーダ側でライティングする想定
-        glDisable(GL_LIGHTING);
-        glDisable(GL_TEXTURE_2D);
-        glShadeModel(GL_FLAT); // 互換プロファイル用。core では意味なし。
+        // 共通描画状態（programBasic_, uLightDir, など）
+        setupDrawingMode();
 
-        static GLuint vao = 0;
-        static GLuint vbo = 0;
+        // ピラミッド Mesh を必要に応じて初期化
+        initPyramidMesh();
 
-        if (vao == 0)
-        {
-            // 1. まず「単位ピラミッド」のメッシュを一度だけ作る（k = 1 とする）
-            constexpr float k = 1.0f;
-            const glm::vec3 top(0.0f, 0.0f, k);
-            const glm::vec3 p1(-k, -k, 0.0f);
-            const glm::vec3 p2(k, -k, 0.0f);
-            const glm::vec3 p3(k, k, 0.0f);
-            const glm::vec3 p4(-k, k, 0.0f);
+        // 補助オブジェクトなのでテクスチャは明示的に OFF にしておく
+        // （drawMeshBasic の実装によっては不要だが、元挙動に合わせて上書き）
+        glUniform1i(uUseTex_, 0);
 
-            // 法線は元コードに合わせて「面ごとに一定」。正規化しておく。
-            auto n01 = glm::normalize(glm::vec3(0.0f, -1.0f, 1.0f));
-            auto n12 = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
-            auto n23 = glm::normalize(glm::vec3(0.0f, 1.0f, 1.0f));
-            auto n30 = glm::normalize(glm::vec3(-1.0f, 0.0f, 1.0f));
-
-            // TRIANGLE_FAN ではなく、4枚の三角形として展開する（頂点12個）
-            std::array<VertexPNC, 12> verts;
-
-            // face 0: top, p1, p2
-            verts[0] = {top, n01, glm::vec4(1.0f)};
-            verts[1] = {p1, n01, glm::vec4(1.0f)};
-            verts[2] = {p2, n01, glm::vec4(1.0f)};
-            // face 1: top, p2, p3
-            verts[3] = {top, n12, glm::vec4(1.0f)};
-            verts[4] = {p2, n12, glm::vec4(1.0f)};
-            verts[5] = {p3, n12, glm::vec4(1.0f)};
-            // face 2: top, p3, p4
-            verts[6] = {top, n23, glm::vec4(1.0f)};
-            verts[7] = {p3, n23, glm::vec4(1.0f)};
-            verts[8] = {p4, n23, glm::vec4(1.0f)};
-            // face 3: top, p4, p1
-            verts[9] = {top, n30, glm::vec4(1.0f)};
-            verts[10] = {p4, n30, glm::vec4(1.0f)};
-            verts[11] = {p1, n30, glm::vec4(1.0f)};
-
-            // 2. VAO/VBO 初期化
-            glGenVertexArrays(1, &vao);
-            glGenBuffers(1, &vbo);
-
-            glBindVertexArray(vao);
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferData(GL_ARRAY_BUFFER,
-                         sizeof(verts),
-                         verts.data(),
-                         GL_STATIC_DRAW);
-
-            // layout(location = 0) position
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(
-                0, 3, GL_FLOAT, GL_FALSE,
-                sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
-
-            // layout(location = 1) normal
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(
-                1, 3, GL_FLOAT, GL_FALSE,
-                sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
-
-            // layout(location = 2) color
-            glEnableVertexAttribArray(2);
-            glVertexAttribPointer(
-                2, 4, GL_FLOAT, GL_FALSE,
-                sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
-
-            glBindVertexArray(0);
-        }
-
-        // 3. 描画ループ：各グリッド位置にインスタンス配置
-        glUseProgram(programBasic_);
-        glBindVertexArray(vao);
-
-        glUniform1i(uUseTex_, 0); // テクスチャは使わない
-        const float kScale = 0.03f; // 元コードの「k」に相当
+        const float kScale = 0.03f; // 元コードの k に相当
 
         for (int i = -1; i <= 1; ++i)
         {
             for (int j = -1; j <= 1; ++j)
             {
-
-                // 色を決める（元コードと同じルール）
+                // 色（元コードと同じルール）
                 glm::vec4 color;
                 if (i == 1 && j == 0)
-                    color = glm::vec4(1, 0, 0, 1);
+                    color = glm::vec4(1, 0, 0, 1); // +X
                 else if (i == 0 && j == 1)
-                    color = glm::vec4(0, 0, 1, 1);
+                    color = glm::vec4(0, 0, 1, 1); // +Y
                 else
-                    color = glm::vec4(1, 1, 0, 1);
+                    color = glm::vec4(1, 1, 0, 1); // others
 
-                // モデル行列：平行移動 + スケーリング
+                // モデル行列：平行移動 + スケール
                 glm::mat4 model(1.0f);
-                model = glm::translate(model, glm::vec3((float)i, (float)j, 0.0f));
+                model = glm::translate(model,
+                                       glm::vec3(static_cast<float>(i),
+                                                 static_cast<float>(j),
+                                                 0.0f));
                 model = glm::scale(model, glm::vec3(kScale));
 
-                glm::mat4 mvp = proj_ * view_ * model;
-
-                // uniform をシェーダに送る
-                glUniformMatrix4fv(uModel_, 1, GL_FALSE, glm::value_ptr(model));
-                glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(mvp));
-                glUniform4fv(uColor_, 1, glm::value_ptr(color));
-
-                // 描画（4面×3頂点 = 12頂点）
-                glDrawArrays(GL_TRIANGLES, 0, 12);
+                // 共通パイプラインで描画
+                drawMeshBasic(meshPyramid_, model, color);
+                // （座標軸用なので影は描かない運用にしておくのが無難）
+                // if (use_shadows) { drawShadowMesh(meshPyramid_, model); }
             }
         }
 
-        glBindVertexArray(0);
-        glUseProgram(0);
+        // drawMeshBasic 側で VAO / program を片付ける設計なら、ここでの後処理は不要。
+        // 念のため状態を戻したいなら以下を入れてもよい。
+        // glBindVertexArray(0);
+        // glUseProgram(0);
     }
 
     void DrawstuffApp::drawTriangleCore(const glm::vec3 p[3],
