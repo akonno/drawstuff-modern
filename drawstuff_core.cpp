@@ -36,6 +36,13 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include <cmath>
 #include <cstdio>
@@ -114,49 +121,8 @@ namespace
 
 } // namespace
 
-namespace
-{
-
-    // ライト方向から「z=0 への影投影行列」を作る
-    glm::mat4 makeShadowProjectMatrix(const glm::vec3 &lightDir)
-    {
-        // 念のため正規化しておく
-        glm::vec3 L = glm::normalize(lightDir);
-
-        // L.z が 0 に近いとまずいので、簡易ガード
-        if (std::abs(L.z) < 1e-4f)
-        {
-            // 真横からの光は許容しない：少しだけ下向きに傾ける
-            L.z = (L.z >= 0.0f ? 1e-4f : -1e-4f);
-        }
-
-        const float kx = L.x / L.z;
-        const float ky = L.y / L.z;
-
-        // 列優先（column-major）で指定
-        return glm::mat4(
-            // column 0
-            1.0f, 0.0f, 0.0f, 0.0f,
-            // column 1
-            0.0f, 1.0f, 0.0f, 0.0f,
-            // column 2
-            -kx, -ky, 0.0f, 0.0f,
-            // column 3
-            0.0f, 0.0f, 0.0f, 1.0f);
-    }
-
-} // anonymous namespace
-
 namespace ds_internal
 {
-    // 頂点構造体の例（好きな場所に定義）
-    struct VertexPNC
-    {
-        glm::vec3 pos;
-        glm::vec3 normal;
-        glm::vec4 color;
-    };
-
     // Report error and exit
     void fatalError(const char *msg, ...)
     {
@@ -296,47 +262,72 @@ namespace ds_internal
     // Texture object.
     class Texture
     {
-        Image *image;
-        GLuint name;
+        Image *image = nullptr;
+        GLuint name = 0;
 
     public:
         Texture(const char *filename)
         {
             image = new Image(filename);
+
             glGenTextures(1, &name);
             glBindTexture(GL_TEXTURE_2D, name);
 
-            // set pixel unpacking mode
-            glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
+            // ピクセルアンパック状態
+            glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
             glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
 
-            // glTexImage2D (GL_TEXTURE_2D, 0, 3, image->width(), image->height(), 0,
-            //		   GL_RGB, GL_UNSIGNED_BYTE, image->data());
-            gluBuild2DMipmaps(GL_TEXTURE_2D, 3, image->width(), image->height(),
-                              GL_RGB, GL_UNSIGNED_BYTE, image->data());
+            // 画像サイズ
+            const GLint width = static_cast<GLint>(image->width());
+            const GLint height = static_cast<GLint>(image->height());
 
-            // set texture parameters - will these also be bound to the texture???
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+            // テクスチャ本体を GPU に送る（ここでは RGB8 固定）
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,       // level
+                GL_RGB8, // internal format（コアでも推奨されるサイズ付き）
+                width,
+                height,
+                0,                // border (must be 0)
+                GL_RGB,           // 画像側のフォーマット
+                GL_UNSIGNED_BYTE, // 画像側の型
+                image->data());
+
+            // ミップマップを自前で生成（gluBuild2DMipmaps の代替）
+            glGenerateMipmap(GL_TEXTURE_2D);
+
+            // テクスチャパラメータ
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                             GL_LINEAR_MIPMAP_LINEAR);
 
-            glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+            // 固定機能のテクスチャ環境は core では無効なので一切設定しない
+            // glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, ...); は削除
+
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
+
         ~Texture()
         {
+            if (name != 0)
+            {
+                glDeleteTextures(1, &name);
+                name = 0;
+            }
             delete image;
-            glDeleteTextures(1, &name);
+            image = nullptr;
         }
-        void bind(int modulate)
+
+        // modulate 引数は互換のため残すが、固定機能の GL_MODULATE/GL_DECAL は core では使えない。
+        // 実際の「乗算するかどうか」は、シェーダ側の uniform で制御する前提。
+        void bind(int /*modulate*/)
         {
             glBindTexture(GL_TEXTURE_2D, name);
-            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE,
-                      modulate ? GL_MODULATE : GL_DECAL);
         }
     };
 
@@ -512,7 +503,7 @@ void main()
         glm::mat4 shadowMvp = proj_ * view_ * model;
 
         glUseProgram(programBasic_);
-        glUniform3f(uLightDir_, shadowLightDir_.x, shadowLightDir_.y, shadowLightDir_.z);
+        glUniform3f(uLightDir_, lightDir_.x, lightDir_.y, lightDir_.z);
         glUniformMatrix4fv(uMVP_, 1, GL_FALSE, glm::value_ptr(shadowMvp));
         glUniform4fv(uColor_, 1, glm::value_ptr(color));
         glUniformMatrix4fv(uModel_, 1, GL_FALSE, glm::value_ptr(model));
@@ -536,7 +527,7 @@ void main()
         glBindVertexArray(mesh.vao);
         if (mesh.ebo != 0)
         {
-            glDrawElements(GL_TRIANGLES,
+            glDrawElements(mesh.primitive,
                            mesh.indexCount,
                            GL_UNSIGNED_INT,
                            nullptr);
@@ -544,7 +535,7 @@ void main()
         else
         {
             // インデックスなし（VBOを先頭から indexCount 頂点ぶん）
-            glDrawArrays(GL_TRIANGLES,
+            glDrawArrays(mesh.primitive,
                          0,
                          mesh.indexCount);
         }
@@ -651,16 +642,16 @@ void main()
         glm::vec3 p3(-gsize, gsize, offset);
 
         glm::vec3 n(0.0f, 0.0f, 1.0f);
-        glm::vec4 color(GROUND_R, GROUND_G, GROUND_B, 1.0f);
 
-        std::array<VertexPNC, 6> verts = {
-            VertexPNC{p0, n, color},
-            VertexPNC{p1, n, color},
-            VertexPNC{p2, n, color},
+        // 頂点フォーマットは VertexPN に統一（色は持たない）
+        std::array<VertexPN, 6> verts = {
+            VertexPN{p0, n},
+            VertexPN{p1, n},
+            VertexPN{p2, n},
 
-            VertexPNC{p0, n, color},
-            VertexPNC{p2, n, color},
-            VertexPNC{p3, n, color},
+            VertexPN{p0, n},
+            VertexPN{p2, n},
+            VertexPN{p3, n},
         };
 
         glGenVertexArrays(1, &vaoGround_);
@@ -668,6 +659,7 @@ void main()
 
         glBindVertexArray(vaoGround_);
         glBindBuffer(GL_ARRAY_BUFFER, vboGround_);
+
         glBufferData(GL_ARRAY_BUFFER,
                      sizeof(verts),
                      verts.data(),
@@ -677,21 +669,20 @@ void main()
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(
             0, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
 
         // layout(location = 1) normal
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(
             1, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
 
-        // layout(location = 2) color
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(
-            2, 4, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
+        // 色属性(layout=2)は使わないので何もしない
 
         glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
     void DrawstuffApp::initSkyProgram()
@@ -776,17 +767,18 @@ void main()
         glm::vec3 p2(ssize, ssize, 0.0f);
         glm::vec3 p3(ssize, -ssize, 0.0f);
 
-        glm::vec3 n(0.0f, 0.0f, -1.0f);          // 一応
-        glm::vec4 color(1.0f, 1.0f, 1.0f, 1.0f); // テクスチャ時は uColor=1 で塗る
+        // 空の板はカメラの上側にあるので、法線は -Z 向きで統一
+        glm::vec3 n(0.0f, 0.0f, -1.0f);
 
-        std::array<VertexPNC, 6> verts = {
-            VertexPNC{p0, n, color},
-            VertexPNC{p1, n, color},
-            VertexPNC{p2, n, color},
+        // 頂点フォーマットは VertexPN に統一（色は持たない）
+        std::array<VertexPN, 6> verts = {
+            VertexPN{p0, n},
+            VertexPN{p1, n},
+            VertexPN{p2, n},
 
-            VertexPNC{p0, n, color},
-            VertexPNC{p2, n, color},
-            VertexPNC{p3, n, color},
+            VertexPN{p0, n},
+            VertexPN{p2, n},
+            VertexPN{p3, n},
         };
 
         glGenVertexArrays(1, &vaoSky_);
@@ -794,6 +786,7 @@ void main()
 
         glBindVertexArray(vaoSky_);
         glBindBuffer(GL_ARRAY_BUFFER, vboSky_);
+
         glBufferData(GL_ARRAY_BUFFER,
                      sizeof(verts),
                      verts.data(),
@@ -803,31 +796,20 @@ void main()
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(
             0, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, pos));
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
 
-        // layout(location = 1) normal（今回は使わないが統一しておく）
+        // layout(location = 1) normal（ライティングするなら使う）
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(
             1, 3, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, normal));
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
 
-        // layout(location = 2) color（今回は使わない）
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(
-            2, 4, GL_FLOAT, GL_FALSE,
-            sizeof(VertexPNC), (void *)offsetof(VertexPNC, color));
+        // layout(location = 2) color は使わないので何もしない
 
         glBindVertexArray(0);
-    }
-
-    void DrawstuffApp::initShadowProjection()
-    {
-        // 元の drawFrame にあったライト設定：
-        // static GLfloat light_position[] = { LIGHTX, LIGHTY, 1.0, 0.0 };
-        //
-        // これと同じ方向を使う：
-        shadowLightDir_ = glm::normalize(glm::vec3(LIGHTX, LIGHTY, 1.0f));
-        shadowProject_ = makeShadowProjectMatrix(shadowLightDir_);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
     void DrawstuffApp::initShadowProgram()
@@ -970,11 +952,11 @@ void main()
 
         glBindVertexArray(mesh.vao);
         if (mesh.ebo != 0) {
-            glDrawElements(GL_TRIANGLES, mesh.indexCount,
+            glDrawElements(mesh.primitive, mesh.indexCount,
                            GL_UNSIGNED_INT, nullptr);
         }
         else {
-            glDrawArrays(GL_TRIANGLES, 0, mesh.indexCount);
+            glDrawArrays(mesh.primitive, 0, mesh.indexCount);
         }
         glBindVertexArray(0);
 
@@ -1207,50 +1189,91 @@ void main()
         }
     }
 
-    // return the index of the highest bit
-    static int getHighBitIndex(unsigned int x)
-    {
-        int i = 0;
-        while (x)
-        {
-            i++;
-            x >>= 1;
-        }
-        return i - 1;
-    }
-
-// shift x left by i, where i can be positive or negative
-#define SHIFTL(x, i) (((i) >= 0) ? ((x) << (i)) : ((x) >> (-i)))
-
     void DrawstuffApp::captureFrame(const int num)
     {
-        fprintf(stderr, "capturing frame %04d\n", num);
+        // ログ出力（stderr 相当）
+        std::cerr << "capturing frame "
+                  << std::setw(4) << std::setfill('0') << num << '\n';
 
-        char s[100];
-        sprintf(s, "frame/frame%04d.ppm", num);
-        FILE *f = fopen(s, "wb");
-        if (!f)
-            fatalError("can't open \"%s\" for writing", s);
-        fprintf(f, "P6\n%d %d\n255\n", width, height);
-        XImage *image = XGetImage(display, win, 0, 0, width, height, ~0, ZPixmap);
+        // ファイル名生成
+        std::ostringstream oss;
+        oss << "frame/frame"
+            << std::setw(4) << std::setfill('0') << num
+            << ".ppm";
+        const std::string filename = oss.str();
 
-        int rshift = 7 - getHighBitIndex(image->red_mask);
-        int gshift = 7 - getHighBitIndex(image->green_mask);
-        int bshift = 7 - getHighBitIndex(image->blue_mask);
-
-        for (int y = 0; y < height; y++)
+        // バイナリ出力ストリーム
+        std::ofstream out(filename, std::ios::binary);
+        if (!out)
         {
-            for (int x = 0; x < width; x++)
-            {
-                unsigned long pixel = XGetPixel(image, x, y);
-                unsigned char b[3];
-                b[0] = SHIFTL(pixel & image->red_mask, rshift);
-                b[1] = SHIFTL(pixel & image->green_mask, gshift);
-                b[2] = SHIFTL(pixel & image->blue_mask, bshift);
-                fwrite(b, 3, 1, f);
-            }
+            fatalError("can't open \"%s\" for writing", filename.c_str());
         }
-        fclose(f);
+
+        // PPM ヘッダ
+        out << "P6\n"
+            << width << ' ' << height << "\n255\n";
+
+        // X11 からフレームバッファ取得
+        XImage *image = XGetImage(display, win,
+                                  0, 0,
+                                  static_cast<unsigned int>(width),
+                                  static_cast<unsigned int>(height),
+                                  ~0UL, ZPixmap);
+        if (!image)
+        {
+            fatalError("XGetImage failed");
+        }
+
+        // --- ここで highBitIndex + SHIFTL 相当を直接処理 ---
+
+        auto computeShift = [](unsigned long mask) -> int
+        {
+            if (mask == 0)
+                return 0;
+            int bit = 0;
+            while (mask >>= 1)
+            {
+                ++bit;
+            }
+            // 0..255 に正規化するために 7bit へ合わせる
+            return 7 - bit;
+        };
+
+        const int rshift = computeShift(image->red_mask);
+        const int gshift = computeShift(image->green_mask);
+        const int bshift = computeShift(image->blue_mask);
+
+        auto shiftWithSign = [](unsigned long value, int shift) -> std::uint8_t
+        {
+            if (shift >= 0)
+                return static_cast<std::uint8_t>((value << shift) & 0xFFu);
+            else
+                return static_cast<std::uint8_t>((value >> (-shift)) & 0xFFu);
+        };
+
+        // 1 行分のバッファ
+        std::vector<std::uint8_t> row(static_cast<std::size_t>(width) * 3);
+
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                const unsigned long pixel = XGetPixel(image, x, y);
+
+                const std::uint8_t r = shiftWithSign(pixel & image->red_mask, rshift);
+                const std::uint8_t g = shiftWithSign(pixel & image->green_mask, gshift);
+                const std::uint8_t b = shiftWithSign(pixel & image->blue_mask, bshift);
+
+                const std::size_t idx = static_cast<std::size_t>(x) * 3;
+                row[idx + 0] = r;
+                row[idx + 1] = g;
+                row[idx + 2] = b;
+            }
+
+            out.write(reinterpret_cast<const char *>(row.data()),
+                      static_cast<std::streamsize>(row.size()));
+        }
+
         XDestroyImage(image);
     }
 
@@ -1286,8 +1309,6 @@ void main()
         glXMakeCurrent(display, win, glx_context);
 
         startGraphics(window_width, window_height, fn);
-
-        initShadowProjection();
         
         static bool firsttime = true;
         if (firsttime)
@@ -1482,25 +1503,18 @@ void main()
         current_color[3] = alpha;
     }
 
+    // メンバ: 現在の色（もともと float[4] ならそこに合わせてください）
+    float current_color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
     void DrawstuffApp::setColor(const float r, const float g, const float b, const float alpha)
     {
-        GLfloat light_ambient[4], light_diffuse[4], light_specular[4];
-        light_ambient[0] = r * 0.3f;
-        light_ambient[1] = g * 0.3f;
-        light_ambient[2] = b * 0.3f;
-        light_ambient[3] = alpha;
-        light_diffuse[0] = r * 0.7f;
-        light_diffuse[1] = g * 0.7f;
-        light_diffuse[2] = b * 0.7f;
-        light_diffuse[3] = alpha;
-        light_specular[0] = r * 0.2f;
-        light_specular[1] = g * 0.2f;
-        light_specular[2] = b * 0.2f;
-        light_specular[3] = alpha;
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, light_ambient);
-        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, light_diffuse);
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, light_specular);
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 5.0f);
+        // 3.3 core 版では固定機能マテリアルは使わない
+        // glMaterial* はすべて削除する
+
+        current_color[0] = r;
+        current_color[1] = g;
+        current_color[2] = b;
+        current_color[3] = alpha;
     }
 
     void DrawstuffApp::setTexture(int texnum)
@@ -1510,12 +1524,10 @@ void main()
 
     void DrawstuffApp::setupDrawingMode()
     {
-        glEnable(GL_LIGHTING);
         if (texture_id)
         {
             if (use_textures)
             {
-                glEnable(GL_TEXTURE_2D);
                 texture[texture_id]->bind(1);
                 glEnable(GL_TEXTURE_GEN_S);
                 glEnable(GL_TEXTURE_GEN_T);
@@ -1526,14 +1538,6 @@ void main()
                 glTexGenfv(GL_S, GL_OBJECT_PLANE, s_params);
                 glTexGenfv(GL_T, GL_OBJECT_PLANE, t_params);
             }
-            else
-            {
-                glDisable(GL_TEXTURE_2D);
-            }
-        }
-        else
-        {
-            glDisable(GL_TEXTURE_2D);
         }
         setColor(current_color[0], current_color[1], current_color[2], current_color[3]);
 
@@ -1548,48 +1552,6 @@ void main()
         }
     }
 
-    void DrawstuffApp::setShadowDrawingMode()
-    {
-        // ここに旧 setShadowDrawingMode() の中身をそのまま書く
-        glDisable(GL_LIGHTING);
-        if (use_textures)
-        {
-            glEnable(GL_TEXTURE_2D);
-            ground_texture->bind(1);
-            glColor3f(SHADOW_INTENSITY, SHADOW_INTENSITY, SHADOW_INTENSITY);
-            glEnable(GL_TEXTURE_2D);
-            glEnable(GL_TEXTURE_GEN_S);
-            glEnable(GL_TEXTURE_GEN_T);
-            glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR);
-            glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR);
-            static GLfloat s_params[4] = {ground_scale, 0, 0, ground_ofsx};
-            static GLfloat t_params[4] = {0, ground_scale, 0, ground_ofsy};
-            glTexGenfv(GL_S, GL_EYE_PLANE, s_params);
-            glTexGenfv(GL_T, GL_EYE_PLANE, t_params);
-        }
-        else
-        {
-            glDisable(GL_TEXTURE_2D);
-            glColor3f(GROUND_R * SHADOW_INTENSITY, GROUND_G * SHADOW_INTENSITY,
-                      GROUND_B * SHADOW_INTENSITY);
-        }
-        glDepthRange(0, 0.9999);
-    }
-
-    void DrawstuffApp::setShadowTransform()
-    {
-        // ここに影描画用変換行列設定コードを移植
-        GLfloat matrix[16];
-        for (int i = 0; i < 16; i++)
-            matrix[i] = 0;
-        matrix[0] = 1;
-        matrix[5] = 1;
-        matrix[8] = -LIGHTX;
-        matrix[9] = -LIGHTY;
-        matrix[15] = 1;
-        glPushMatrix();
-        glMultMatrixf(matrix);
-    }
     // ヘッダ or cpp のファイルスコープに置いてしまって良い（display list は不要）
     constexpr float ICX = 0.525731112119133606f;
     constexpr float ICZ = 0.850650808352039932f;
@@ -1662,7 +1624,7 @@ void main()
         }
     }
 
-    void DrawstuffApp::buildSphereMeshForQuality(int quality, Mesh &dstMesh)
+    void DrawstuffApp::initSphereMeshForQuality(int quality, Mesh &dstMesh)
     {
         std::vector<VertexPN> vertices;
         std::vector<uint32_t> indices;
@@ -1733,7 +1695,7 @@ void main()
         glBindVertexArray(0);
     }
 
-    void DrawstuffApp::buildCylinderMeshForQuality(int quality, Mesh &dstMesh)
+    void DrawstuffApp::initCylinderMeshForQuality(int quality, Mesh &dstMesh)
     {
         using std::sin;
         using std::cos;
@@ -1907,7 +1869,7 @@ void main()
 
         glBindVertexArray(0);
     }
-    static void createMeshFromVectors(
+    static void initMeshFromVectors(
         Mesh &dst,
         const std::vector<VertexPN> &vertices,
         const std::vector<uint32_t> &indices)
@@ -1962,7 +1924,7 @@ void main()
 
         glBindVertexArray(0);
     }
-    static void buildUnitCapsuleParts(
+    static void initUnitCapsuleParts(
         Mesh &bodyMesh,
         Mesh &capTopMesh,
         Mesh &capBottomMesh)
@@ -2199,9 +2161,9 @@ void main()
         // =================================================
         // 4. Mesh へ転送
         // =================================================
-        createMeshFromVectors(bodyMesh, cylVerts, cylIndices);
-        createMeshFromVectors(capTopMesh, capTopVerts, capTopIndices);
-        createMeshFromVectors(capBottomMesh, capBottomVerts, capBottomIndices);
+        initMeshFromVectors(bodyMesh, cylVerts, cylIndices);
+        initMeshFromVectors(capTopMesh, capTopVerts, capTopIndices);
+        initMeshFromVectors(capBottomMesh, capBottomVerts, capBottomIndices);
     }
 
     void DrawstuffApp::initTriangleMesh()
@@ -2287,9 +2249,10 @@ void main()
                      nullptr,
                      GL_DYNAMIC_DRAW);
 
-        // インデックスは使わない
+        // ライン用メッシュ構築（インデックスは使わない）
         meshLine_.ebo = 0;
         meshLine_.indexCount = 2;
+        meshLine_.primitive = GL_LINES;
 
         // layout(location=0) pos, location=1 normal
         glEnableVertexAttribArray(0);
@@ -2483,19 +2446,19 @@ void main()
 
         // --- ここから sphere 用メッシュ生成 ---
 
-        buildSphereMeshForQuality(1, meshSphere_[1]);
-        buildSphereMeshForQuality(2, meshSphere_[2]);
-        buildSphereMeshForQuality(3, meshSphere_[3]);
+        initSphereMeshForQuality(1, meshSphere_[1]);
+        initSphereMeshForQuality(2, meshSphere_[2]);
+        initSphereMeshForQuality(3, meshSphere_[3]);
 
         // --- ここから cylinder 用メッシュ生成 ---
-        buildCylinderMeshForQuality(1, meshCylinder_[1]);
-        buildCylinderMeshForQuality(2, meshCylinder_[2]);
-        buildCylinderMeshForQuality(3, meshCylinder_[3]);
+        initCylinderMeshForQuality(1, meshCylinder_[1]);
+        initCylinderMeshForQuality(2, meshCylinder_[2]);
+        initCylinderMeshForQuality(3, meshCylinder_[3]);
 
         // --- ここから capsule 用メッシュ生成 ---
-        buildUnitCapsuleParts(meshCapsuleBody_,
-                              meshCapsuleCapTop_,
-                              meshCapsuleCapBottom_);
+        initUnitCapsuleParts(meshCapsuleBody_,
+                             meshCapsuleCapTop_,
+                             meshCapsuleCapBottom_);
 
         initTriangleMesh();
         initTrianglesBatchMesh();
@@ -2506,9 +2469,6 @@ void main()
 
     void DrawstuffApp::drawSky(const float view_xyz[3])
     {
-        glDisable(GL_LIGHTING);
-        glDisable(GL_TEXTURE_2D); // core では意味無いが一応
-        glShadeModel(GL_FLAT);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
 
@@ -2573,9 +2533,6 @@ void main()
 
     void DrawstuffApp::drawGround()
     {
-        glDisable(GL_LIGHTING);
-        glDisable(GL_TEXTURE_2D); // core では意味ないが一応
-        glShadeModel(GL_FLAT);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
         glDisable(GL_FOG);
@@ -2792,39 +2749,41 @@ void main()
             texture[i].reset();
         }
     }
-
-    void DrawstuffApp::drawFrame(const int width, const int height,
-                                 const dsFunctions *fn, const int pause)
+    void DrawstuffApp::drawFrame(const int width,
+                                 const int height,
+                                 const dsFunctions *fn,
+                                 const int pause)
     {
         if (current_state == SIM_STATE_NOT_STARTED)
+        {
             internalError("internal error");
+        }
         current_state = SIM_STATE_DRAWING;
 
-        // ---- GL の基本状態設定（ここはとりあえずそのまま） ----
-        glEnable(GL_LIGHTING);
-        glEnable(GL_LIGHT0);
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_TEXTURE_GEN_S);
-        glDisable(GL_TEXTURE_GEN_T);
-        glShadeModel(GL_FLAT);
+        // ---- 基本 GL 状態（core で有効なものだけ）----
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
+
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);
 
+        // ※ GL_LIGHT0 / GL_TEXTURE_GEN_* / glLight* / glColor* は 3.3 core では使わない
+
         // ---- ビューポート ----
         glViewport(0, 0, width, height);
 
-        // ---- 投影行列: glFrustum → glm::frustum ----
-        const float vnear = 0.1f;
-        const float vfar = 100.0f;
-        const float k = 0.8f; // 1=±45°
+        // ---- 投影行列を GLM で計算してメンバ proj_ に保持 ----
+        constexpr float vnear = 0.1f;
+        constexpr float vfar = 100.0f;
+        constexpr float k = 0.8f; // 1 = ±45°
 
         float left, right, bottom, top;
         if (width >= height)
         {
-            const float k2 = (height > 0) ? float(height) / float(width) : 1.0f;
+            const float k2 = (height > 0)
+                                 ? static_cast<float>(height) / static_cast<float>(width)
+                                 : 1.0f;
             left = -vnear * k;
             right = vnear * k;
             bottom = -vnear * k * k2;
@@ -2832,76 +2791,65 @@ void main()
         }
         else
         {
-            const float k2 = (height > 0) ? float(width) / float(height) : 1.0f;
+            const float k2 = (height > 0)
+                                 ? static_cast<float>(width) / static_cast<float>(height)
+                                 : 1.0f;
             left = -vnear * k * k2;
             right = vnear * k * k2;
             bottom = -vnear * k;
             top = vnear * k;
         }
 
-        // GLM で投影行列を生成し、メンバに保持
         proj_ = glm::frustum(left, right, bottom, top, vnear, vfar);
 
-        // まだ固定機能を使っているあいだは、互換のために glLoadMatrixf する
-        glMatrixMode(GL_PROJECTION);
-        glLoadMatrixf(glm::value_ptr(proj_));
-
-        // ---- ライト設定（従来どおり PROJECTION モードで） ----
-        static GLfloat light_ambient[] = {0.5f, 0.5f, 0.5f, 1.0f};
-        static GLfloat light_diffuse[] = {1.0f, 1.0f, 1.0f, 1.0f};
-        static GLfloat light_specular[] = {1.0f, 1.0f, 1.0f, 1.0f};
-        glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient);
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
-        glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
-        glColor3f(1.0f, 1.0f, 1.0f);
+        // ★ 3.3 core なので glMatrixMode/glLoadMatrixf は一切呼ばない。
+        //   proj_ は drawMeshBasic / drawSky / drawGround / drawPyramidGrid の中で
+        //   uMVP に使われる前提。
 
         // ---- 画面クリア ----
-        glClearColor(0.5f, 0.5f, 0.5f, 0);
+        glClearColor(0.5f, 0.5f, 0.5f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // ---- カメラパラメータのスナップショット ----
-        float view2_xyz[3];
-        float view2_hpr[3];
-        memcpy(view2_xyz, view_xyz.data(), sizeof(float) * 3);
-        memcpy(view2_hpr, view_hpr.data(), sizeof(float) * 3);
+        const auto view2_xyz = view_xyz; // std::array<float,3> などを想定
+        const auto view2_hpr = view_hpr;
 
-        // ---- MODELVIEW & カメラ設定 ----
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
+        // ---- view_ を更新する（setCamera の内部で glm による view 行列を作る想定）----
         setCamera(view2_xyz[0], view2_xyz[1], view2_xyz[2],
                   view2_hpr[0], view2_hpr[1], view2_hpr[2]);
+        // ※ setCamera は 3.3 core 版になっていて、
+        //   glMatrixMode/glLoadIdentity/glRotatef/glTranslatef ではなく
+        //   view_ を直接更新する実装になっている前提。
 
-        // ここで setCamera 側も GLM で view_ を更新しておくと、
-        // Core Profile 移行が楽になります（前メッセージの案）。
-
-        // ---- ライト位置（従来どおり MODELVIEW で）----
-        static GLfloat light_position[] = {LIGHTX, LIGHTY, 1.0f, 0.0f};
-        glLightfv(GL_LIGHT0, GL_POSITION, light_position);
+        // ---- ライト方向の更新（固定機能 glLight* は使わない）----
+        // --> 投影行列を定数化したので，不要．
 
         // ---- 背景（空・地面など）----
-        drawSky(view2_xyz);
+        drawSky(view2_xyz.data()); // 既存シグネチャに合わせて必要なら .data()
         drawGround();
 
         // ---- 地面のマーカー ----
         drawPyramidGrid();
 
-        // ---- OpenGL 状態を整えてからユーザ描画へ ----
-        glEnable(GL_LIGHTING);
-        glDisable(GL_TEXTURE_2D);
-        glShadeModel(GL_FLAT);
+        // ---- ユーザ描画前の状態整備 ----
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
-        glColor3f(1, 1, 1);
-        setColor(1, 1, 1, 1);
 
-        current_color[0] = 1;
-        current_color[1] = 1;
-        current_color[2] = 1;
-        current_color[3] = 1;
-        texture_id = 0;
+        // setColor は 3.3 core 版（current_color を更新するだけ）の実装になっている前提
+        setColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-        if (fn->step)
+        current_color[0] = 1.0f;
+        current_color[1] = 1.0f;
+        current_color[2] = 1.0f;
+        current_color[3] = 1.0f;
+
+        texture_id = 0; // 「テクスチャ未使用」の初期値として継続利用
+
+        // ---- ユーザ描画コールバック ----
+        if (fn && fn->step)
+        {
             fn->step(pause);
+        }
     }
 
 } // namespace ds_internal

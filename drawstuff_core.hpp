@@ -54,6 +54,39 @@ typedef struct dsFunctions
     const char *path_to_textures; /* if nonzero, path to texture files */
 } dsFunctions;
 
+namespace
+{
+
+    // ライト方向から「z=0 への影投影行列」を作る
+    glm::mat4 makeShadowProjectMatrix(const glm::vec3 &lightDir)
+    {
+        // 念のため正規化しておく
+        glm::vec3 L = glm::normalize(lightDir);
+
+        // L.z が 0 に近いとまずいので、簡易ガード
+        if (std::abs(L.z) < 1e-4f)
+        {
+            // 真横からの光は許容しない：少しだけ下向きに傾ける
+            L.z = (L.z >= 0.0f ? 1e-4f : -1e-4f);
+        }
+
+        const float kx = L.x / L.z;
+        const float ky = L.y / L.z;
+
+        // 列優先（column-major）で指定
+        return glm::mat4(
+            // column 0
+            1.0f, 0.0f, 0.0f, 0.0f,
+            // column 1
+            0.0f, 1.0f, 0.0f, 0.0f,
+            // column 2
+            -kx, -ky, 0.0f, 0.0f,
+            // column 3
+            0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+} // anonymous namespace
+
 namespace ds_internal
 {
     enum SimulationState
@@ -98,6 +131,7 @@ namespace ds_internal
         GLuint vbo = 0;
         GLuint ebo = 0; // インデックスを使うなら
         GLsizei indexCount = 0;
+        GLenum primitive = GL_TRIANGLES;
     };
 
     // constants to convert degrees to radians and the reverse
@@ -546,7 +580,7 @@ namespace ds_internal
         void drawLine(const T pos1[3], const T pos2[3])
         {
             static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "T must be float or double");
 
             if (current_state != SIM_STATE_DRAWING)
@@ -559,22 +593,22 @@ namespace ds_internal
             // 共通の描画状態（programBasic_, uColor, ライティング etc.）
             setupDrawingMode();
 
-            // glColor4f は Core では使えないので、
-            // current_color は setupDrawingMode() or シェーダ側の uniform 経由で反映されている前提。
-            // もし色だけ別にしたい場合はここで uColor を上書き。
-
+            // ライン用メッシュに頂点を流し込む
             drawLineCore(pos1, pos2);
 
+            // モデル行列：pos1/pos2 そのものをワールド座標として使うので単位行列
+            glm::mat4 model(1.0f);
+
+            // 線幅（対応状況は GPU 依存だが、指定するだけしておく）
+            glLineWidth(2.0f);
+
+            // 本体描画（他のプリミティブと同じパイプライン）
+            drawMeshBasic(meshLine_, model, current_color);
+
+            // 影（他のプリミティブと同じく programShadow_ に統一）
             if (use_shadows)
             {
-                // 既存の影用パスに乗る
-                setShadowDrawingMode();
-                setShadowTransform();
-
-                drawLineCore(pos1, pos2);
-
-                glPopMatrix(); // 既存の影行列スタック処理に合わせる
-                glDepthRange(0, 1);
+                drawShadowMesh(meshLine_, model);
             }
         }
 
@@ -660,9 +694,11 @@ namespace ds_internal
         void initSkyProgram();
         void initSkyMesh();
 
-        // 影用：ライト方向と投影行列
-        glm::vec3 shadowLightDir_; // ライトの方向（ワールド座標）
-        glm::mat4 shadowProject_;  // 地面 z=0 への投影行列
+        // 光源方向（平行光）
+        const glm::vec3 lightDir_ = glm::normalize(glm::vec3(LIGHTX, LIGHTY, 1.0f)); // ライトの方向（ワールド座標）
+
+        // 影用投影行列（地面 z=0 への投影行列）
+        const glm::mat4 shadowProject_ = makeShadowProjectMatrix(lightDir_);
 
         // 影用シェーダ
         GLuint programShadow_ = 0;
@@ -682,7 +718,7 @@ namespace ds_internal
         void initLineMesh();
 
         void initPyramidMesh();
-        
+
         // 必要ならカメラパラメータも保存
         float cam_x_ = 0.0f, cam_y_ = 0.0f, cam_z_ = 0.0f;
         float cam_h_ = 0.0f, cam_p_ = 0.0f, cam_r_ = 0.0f;
@@ -716,14 +752,12 @@ namespace ds_internal
         void captureFrame(const int num);
         void initMotionModel();
         void applyViewpointToGL();
-        void buildSphereMeshForQuality(int quality, Mesh &dstMesh);
-        void buildCylinderMeshForQuality(int quality, Mesh &dstMesh);
+        void initSphereMeshForQuality(int quality, Mesh &dstMesh);
+        void initCylinderMeshForQuality(int quality, Mesh &dstMesh);
         void initTriangleMesh();
         void initTrianglesBatchMesh();
         void createPrimitiveMeshes();
         void setupDrawingMode();
-        void setShadowDrawingMode();
-        void setShadowTransform();
         void drawSky(const float view_xyz[3]);
         void drawGround();
         void drawPyramidGrid();
@@ -742,43 +776,6 @@ namespace ds_internal
             const glm::mat4 &model);
 
         // テンプレート関数群
-        template <typename T>
-        void normalizeVector3(T v[3])
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            T len = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-            if (len <= 0.0f)
-            {
-                v[0] = 1;
-                v[1] = 0;
-                v[2] = 0;
-            }
-            else
-            {
-                len = 1.0f / (float)sqrt(len);
-                v[0] *= len;
-                v[1] *= len;
-                v[2] *= len;
-            }
-        }
-        template <typename T>
-        void crossProduct3(T res[3], const T a[3], const T b[3])
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            const T res_0 = a[1] * b[2] - a[2] * b[1];
-            const T res_1 = a[2] * b[0] - a[0] * b[2];
-            const T res_2 = a[0] * b[1] - a[1] * b[0];
-            // Only assign after all the calculations are over to avoid incurring memory aliasing
-            res[0] = res_0;
-            res[1] = res_1;
-            res[2] = res_2;
-        }
         template <typename T>
         void setTransform(const T pos[3], const T R[12])
         {
@@ -931,14 +928,14 @@ namespace ds_internal
         void drawLineCore(const T pos1[3], const T pos2[3])
         {
             static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "T must be float or double");
 
-            initLineMesh();
+            initLineMesh(); // VAO/VBO 初期化。meshLine_.primitive = GL_LINES 前提。
 
             VertexPN verts[2];
 
-            // 位置はそのまま「ワールド座標」として使う
+            // 位置（ワールド座標）
             verts[0].pos = glm::vec3(
                 static_cast<float>(pos1[0]),
                 static_cast<float>(pos1[1]),
@@ -948,7 +945,7 @@ namespace ds_internal
                 static_cast<float>(pos2[1]),
                 static_cast<float>(pos2[2]));
 
-            // 法線は適当でよい（照明にほぼ影響しないし、A項で最低限明るくなる）
+            // 法線：適当に線方向を入れておく（A項でそれなりに見える）
             glm::vec3 dir = verts[1].pos - verts[0].pos;
             glm::vec3 N = glm::length(dir) > 0.0f
                               ? glm::normalize(dir)
@@ -957,6 +954,7 @@ namespace ds_internal
             verts[0].normal = N;
             verts[1].normal = N;
 
+            // VBO に書き込み
             glBindBuffer(GL_ARRAY_BUFFER, meshLine_.vbo);
             glBufferSubData(GL_ARRAY_BUFFER,
                             0,
@@ -964,18 +962,8 @@ namespace ds_internal
                             verts);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-            meshLine_.indexCount = 2; // 安心のため更新
-
-            glBindVertexArray(meshLine_.vao);
-
-            glLineWidth(2.0f);
-
-            // ここでは primitive type だけ LINES に切り替える
-            // シェーダは programBasic_ / programShadow_ がすでに bind 済み前提
-            glDrawArrays(GL_LINES, 0, meshLine_.indexCount);
-
-            glBindVertexArray(0);
+            // 念のため：2 頂点
+            meshLine_.indexCount = 2;
         }
     };
-
 } // namespace ds_internal
