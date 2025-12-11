@@ -333,10 +333,6 @@ namespace ds_internal
 
     constexpr int DS_NUMTEXTURES = 4; // number of standard textures
     std::array<std::unique_ptr<Texture>, DS_NUMTEXTURES + 1> texture;
-    Texture *sky_texture = nullptr;
-    Texture *ground_texture = nullptr;
-    Texture *wood_texture = nullptr;
-    Texture *checkered_texture = nullptr;
 
     // ================ DrawstuffApp implementation =================
     DrawstuffApp &DrawstuffApp::instance()
@@ -517,7 +513,7 @@ void main()
             glUniform1i(uUseTex_, GL_TRUE);
 
             glActiveTexture(GL_TEXTURE0);
-            texture[DS_WOOD]->bind(0); // あるいは glBindTexture(GL_TEXTURE_2D, ...)
+            bindTextureUnit0(DS_WOOD);
             glUniform1i(uTex_, 0);     // sampler2D uTex はテクスチャユニット0を参照
         }
         else
@@ -939,7 +935,7 @@ void main()
             glUniform1i(uShadowUseTex_, GL_TRUE);
 
             glActiveTexture(GL_TEXTURE0);
-            ground_texture->bind(0);
+            bindTextureUnit0(DS_GROUND);
             glUniform1i(uGroundTex_, 0);
         }
         else
@@ -1522,23 +1518,27 @@ void main()
         texture_id = texnum;
     }
 
-    void DrawstuffApp::setupDrawingMode()
+    void DrawstuffApp::bindTextureUnit0(const int texId)
     {
-        if (texture_id)
+        if (texId < 0 || !texture[texId])
         {
-            if (use_textures)
-            {
-                texture[texture_id]->bind(1);
-                glEnable(GL_TEXTURE_GEN_S);
-                glEnable(GL_TEXTURE_GEN_T);
-                glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
-                glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR);
-                static GLfloat s_params[4] = {1.0f, 1.0f, 0.0f, 1};
-                static GLfloat t_params[4] = {0.817f, -0.817f, 0.817f, 1};
-                glTexGenfv(GL_S, GL_OBJECT_PLANE, s_params);
-                glTexGenfv(GL_T, GL_OBJECT_PLANE, t_params);
-            }
+            // 無効なら何もしない
+            return;
         }
+
+        if (texId == currentBoundTextureId_)
+        {
+            // すでに同じテクスチャが GL_TEXTURE0 にバインドされている
+            return;
+        }
+
+        glActiveTexture(GL_TEXTURE0);
+        texture[texId]->bind(0); // 内部で glBindTexture(GL_TEXTURE_2D, ...) している前提
+        currentBoundTextureId_ = texId;
+    }
+
+    void DrawstuffApp::applyMaterials()
+    {
         setColor(current_color[0], current_color[1], current_color[2], current_color[3]);
 
         if (current_color[3] < 1)
@@ -2508,11 +2508,10 @@ void main()
         glUniform1f(uSkyScale_, sky_scale);
         glUniform1f(uSkyOffset_, offset);
 
-        if (use_textures && sky_texture)
+        if (use_textures)
         {
             glUniform1i(uSkyUseTex_, 1);    // テクスチャを使う
-            glActiveTexture(GL_TEXTURE0);
-            sky_texture->bind(0);     // 内部で glBindTexture(GL_TEXTURE_2D, ...) している前提
+            bindTextureUnit0(DS_SKY);
             glUniform1i(uSkyTex_, 0); // sampler2D uTex にユニット 0 を対応付け
         }
         else
@@ -2552,6 +2551,10 @@ void main()
         if (use_textures) {
             groundColor = glm::vec4(1.0f);
             glUniform1i(uGroundUseTex_, 1); // テクスチャ有効
+
+            // テクスチャをユニット0に bind
+            bindTextureUnit0(DS_GROUND);
+            glUniform1i(uGroundTex_, 0);
         }
         else
         {
@@ -2563,11 +2566,6 @@ void main()
         // 元のパラメータを uniform で渡す
         glUniform1f(uGroundScale_, ground_scale);
         glUniform2f(uGroundOffset_, ground_ofsx, ground_ofsy);
-
-        // テクスチャをユニット0に bind
-        glActiveTexture(GL_TEXTURE0);
-        ground_texture->bind(0); // 内部で glBindTexture(GL_TEXTURE_2D, ...) している想定
-        glUniform1i(uGroundTex_, 0);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
@@ -2582,7 +2580,7 @@ void main()
         glDepthFunc(GL_LESS);
 
         // 共通描画状態（programBasic_, uLightDir, など）
-        setupDrawingMode();
+        applyMaterials();
 
         // ピラミッド Mesh を必要に応じて初期化
         initPyramidMesh();
@@ -2727,19 +2725,15 @@ void main()
 
         std::string skypath = std::string(prefix) + "/sky.ppm";
         texture[DS_SKY] = std::make_unique<Texture>(skypath.c_str());
-        sky_texture = texture[DS_SKY].get();
         
         std::string groundpath = std::string(prefix) + "/ground.ppm";
         texture[DS_GROUND] = std::make_unique<Texture>(groundpath.c_str());
-        ground_texture = texture[DS_GROUND].get();
 
         std::string woodpath = std::string(prefix) + "/wood.ppm";
         texture[DS_WOOD] = std::make_unique<Texture>(woodpath.c_str());
-        wood_texture = texture[DS_WOOD].get();
 
         std::string checkeredpath = std::string(prefix) + "/checkered.ppm";
         texture[DS_CHECKERED] = std::make_unique<Texture>(checkeredpath.c_str());
-        checkered_texture = texture[DS_CHECKERED].get();
     }
 
     void DrawstuffApp::stopGraphics()

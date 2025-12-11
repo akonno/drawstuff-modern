@@ -9,8 +9,6 @@
 #include <X11/Xlib.h>  // XEvent など
 #include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
 #include <glad/glad.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp> // lookAt, perspective, rotate, translate
 #include <glm/gtc/type_ptr.hpp>         // value_ptr
@@ -95,29 +93,6 @@ namespace ds_internal
         SIM_STATE_RUNNING = 1,
         SIM_STATE_DRAWING = 2
     };
-    // GL 型特性
-    template <typename T>
-    struct GLType;
-
-    template <>
-    struct GLType<float>
-    {
-        using type = GLfloat;
-        static constexpr auto multMatrix = &glMultMatrixf;
-    };
-
-    template <>
-    struct GLType<double>
-    {
-        using type = GLdouble;
-        static constexpr auto multMatrix = &glMultMatrixd;
-    };
-
-    enum class GLBackend
-    {
-        Legacy, // 今までどおり glBegin なども使える
-        Core33, // シェーダ + VAO/VBO + 自前行列 のみ
-    };
 
     struct VertexPN
     {
@@ -161,7 +136,6 @@ namespace ds_internal
     {
     public:
         static DrawstuffApp &instance();
-        GLBackend backend_ = GLBackend::Legacy; // 最初は既存どおり
 
         // C API から呼ばれる入り口
         int runSimulation(const int argc, const char *const argv[],
@@ -239,13 +213,6 @@ namespace ds_internal
             cam_h_ = hf;
             cam_p_ = pf;
             cam_r_ = rf;
-
-            // 互換用に legacy パスを残すなら：
-            if (backend_ == GLBackend::Legacy)
-            {
-                glMatrixMode(GL_MODELVIEW);
-                glLoadMatrixf(glm::value_ptr(view_));
-            }
         }
 
         template <typename T>
@@ -261,7 +228,7 @@ namespace ds_internal
                 s += " (current_state=" + std::to_string(current_state) + ")";
                 fatalError(s.c_str());
             }
-            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+            applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
             glm::mat4 model = buildModelMatrix(pos, R, sides);
 
@@ -287,7 +254,7 @@ namespace ds_internal
                 fatalError(s.c_str());
             }
 
-            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+            applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
             const T sides[3] = { radius, radius, radius };
             glm::mat4 model = buildModelMatrix(pos, R, sides);
@@ -313,7 +280,7 @@ namespace ds_internal
                 fatalError(s.c_str());
             }
 
-            setupDrawingMode();
+            applyMaterials();
 
             float l = static_cast<float>(length); // 平行部の長さ
             float r = static_cast<float>(radius); // 半径
@@ -377,7 +344,7 @@ namespace ds_internal
                 fatalError(s.c_str());
             }
 
-            setupDrawingMode(); // ライティングやカリングなど、既存の状態設定
+            applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
             const T scaleXYZ[3] = {radius, radius, length};
             glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
@@ -403,7 +370,7 @@ namespace ds_internal
                 fatalError(s.c_str());
             }
 
-            setupDrawingMode();
+            applyMaterials();
 
             // 1つの drawTriangles 呼び出しの中では pos,R は共通
             const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
@@ -460,7 +427,7 @@ namespace ds_internal
                 fatalError(s.c_str());
             }
 
-            setupDrawingMode();
+            applyMaterials();
 
             const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
             glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
@@ -491,7 +458,7 @@ namespace ds_internal
             }
 
             // ライティング・テクスチャ等の共通設定
-            setupDrawingMode();
+            applyMaterials();
 
             // Convex はローカル座標で定義されているので scale=1
             const T scaleXYZ[3] = {static_cast<T>(1.0),
@@ -591,7 +558,7 @@ namespace ds_internal
             }
 
             // 共通の描画状態（programBasic_, uColor, ライティング etc.）
-            setupDrawingMode();
+            applyMaterials();
 
             // ライン用メッシュに頂点を流し込む
             drawLineCore(pos1, pos2);
@@ -735,6 +702,7 @@ namespace ds_internal
 
         glm::vec4 current_color;
         int texture_id;
+        int currentBoundTextureId_ = -1;
 
         dsFunctions callbacks_storage_;       // 渡された dsFunctions を保持（実体）
         const dsFunctions *callbacks_ = nullptr;
@@ -757,7 +725,7 @@ namespace ds_internal
         void initTriangleMesh();
         void initTrianglesBatchMesh();
         void createPrimitiveMeshes();
-        void setupDrawingMode();
+        void applyMaterials();
         void drawSky(const float view_xyz[3]);
         void drawGround();
         void drawPyramidGrid();
@@ -775,40 +743,9 @@ namespace ds_internal
             const Mesh &mesh,
             const glm::mat4 &model);
 
+        void bindTextureUnit0(const int texId);
+
         // テンプレート関数群
-        template <typename T>
-        void setTransform(const T pos[3], const T R[12])
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // ここで変換行列をセットする処理を実装
-            using GLT = typename GLType<T>::type;
-            GLT matrix[16];
-            matrix[0] = R[0];
-            matrix[1] = R[4];
-            matrix[2] = R[8];
-            matrix[3] = 0;
-            matrix[4] = R[1];
-            matrix[5] = R[5];
-            matrix[6] = R[9];
-            matrix[7] = 0;
-            matrix[8] = R[2];
-            matrix[9] = R[6];
-            matrix[10] = R[10];
-            matrix[11] = 0;
-            matrix[12] = pos[0];
-            matrix[13] = pos[1];
-            matrix[14] = pos[2];
-            matrix[15] = 1;
-            glPushMatrix();
-            if constexpr (std::is_same<T, float>::value)
-                glMultMatrixf(matrix);
-            else
-                glMultMatrixd(matrix);
-        }
-
         template <typename T>
         glm::mat4 buildModelMatrix(
             const T pos[3], const T R[12], const T sides[3])
@@ -838,59 +775,6 @@ namespace ds_internal
                                          (float)sides[2]));
 
             return model;
-        }
-
-        template <typename T>
-        void drawSphereShadow(const T px, const T py, const T pz,
-                              const T radius)
-        {
-            static_assert(
-                std::is_same<T, float>::value || std::is_same<T, double>::value,
-                "T must be float or double");
-
-            // ここに球の影描画コードを移植
-            // calculate shadow constants based on light vector
-            static int init = 0;
-            static T len2, len1, scale;
-            if (!init)
-            {
-                len2 = LIGHTX * LIGHTX + LIGHTY * LIGHTY;
-                len1 = 1.0f / (T)sqrt(len2);
-                scale = (T)sqrt(len2 + 1);
-                init = 1;
-            }
-
-            // map sphere center to ground plane based on light vector
-            const T cx = px - LIGHTX * pz;
-            const T cy = py - LIGHTY * pz;
-
-            const T kx = 0.96592582628907f;
-            const T ky = 0.25881904510252f;
-            T x = radius, y = 0;
-
-            glBegin(GL_TRIANGLE_FAN);
-            for (int i = 0; i < 24; i++)
-            {
-                // for all points on circle, scale to elongated rotated shadow and draw
-                T x2 = (LIGHTX * x * scale - LIGHTY * y) * len1 + cx;
-                T y2 = (LIGHTY * x * scale + LIGHTX * y) * len1 + cy;
-                if constexpr (std::is_same<T, float>::value)
-                {
-                    glTexCoord2f(x2 * ground_scale + ground_ofsx, y2 * ground_scale + ground_ofsy);
-                    glVertex3f(x2, y2, 0);
-                }
-                else
-                {
-                    glTexCoord2d(x2 * ground_scale + ground_ofsx, y2 * ground_scale + ground_ofsy);
-                    glVertex3d(x2, y2, 0);
-                }
-
-                // rotate [x,y] vector
-                T xtmp = kx * x - ky * y;
-                y = ky * x + kx * y;
-                x = xtmp;
-            }
-            glEnd();
         }
 
         template <typename T>
