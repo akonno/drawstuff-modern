@@ -114,7 +114,7 @@ void dsDrawFrame(const int width, const int height, const dsFunctions *fn, const
     with_app(
         [width, height, fn, pause](ds_internal::DrawstuffApp &app)
         {
-            app.drawFrame(width, height, fn, pause);
+            app.renderFrame(width, height, fn, pause);
         });
 }
 

@@ -1,4 +1,4 @@
-// drawstuff_core.hpp (仮称) – 内部専用ヘッダ
+// drawstuff_core.hpp – 内部専用ヘッダ
 #pragma once
 
 #include <array>
@@ -113,6 +113,18 @@ namespace ds_internal
         GLenum primitive = GL_TRIANGLES;
     };
 
+    struct InstanceBasic
+    {
+        glm::mat4 model;
+        glm::vec4 color;
+        // 必要ならフラグなど
+    };
+
+    extern std::vector<InstanceBasic> sphereInstances_;
+    extern std::vector<InstanceBasic> boxInstances_;
+    extern std::vector<InstanceBasic> cylinderInstances_;
+    // カプセルは sphereTop / sphereBottom / cylinderSide にそれぞれ分ける
+
     // constants to convert degrees to radians and the reverse
     constexpr float RAD_TO_DEG = 180.0 / M_PI;
     constexpr float DEG_TO_RAD = M_PI / 180.0;
@@ -156,7 +168,7 @@ namespace ds_internal
         void startGraphics(const int width, const int height, const dsFunctions *fn);
         void stopGraphics();
 
-        void drawFrame(const int width, const int height, const dsFunctions *fn, const int pause);
+        void renderFrame(const int width, const int height, const dsFunctions *fn, const int pause);
         void drawTriangleCore(const glm::vec3 p[3],
                               const glm::vec3 &N,
                               const glm::mat4 &model,
@@ -243,11 +255,11 @@ namespace ds_internal
 
             glm::mat4 model = buildModelMatrix(pos, R, {sides[0], sides[1], sides[2]});
 
-            // 本体（Core パス）
-            drawMeshBasic(meshBox_, model, current_color);
-
-            // 影（Core パス）
-            drawShadowMesh(meshBox_, model);
+            // 即時描画せず、「箱のインスタンス」として登録する
+            InstanceBasic inst;
+            inst.model = model;
+            inst.color = current_color;
+            boxInstances_.push_back(inst);
         }
 
         template <typename T>
@@ -269,11 +281,11 @@ namespace ds_internal
 
             glm::mat4 model = buildModelMatrix(pos, R, {radius, radius, radius});
 
-            // 本体（Core パス）
-            drawMeshBasic(meshSphere_[sphere_quality], model, current_color);
-
-            // 影（Core パス）
-            drawShadowMesh(meshSphere_[sphere_quality], model);
+            // 即時描画せず、「箱のインスタンス」として登録する
+            InstanceBasic inst;
+            inst.model = model;
+            inst.color = current_color;
+            sphereInstances_.push_back(inst);
         }
 
         //=====================================================================
@@ -357,10 +369,11 @@ namespace ds_internal
 
             glm::mat4 model = buildModelMatrix(pos, R, {radius, radius, length});
 
-            // 本体（Core パス）
-            drawMeshBasic(meshCylinder_[cylinder_quality], model, current_color);
-            // 影（Core パス）
-            drawShadowMesh(meshCylinder_[cylinder_quality], model);
+            // 即時描画せず、「箱のインスタンス」として登録する
+            InstanceBasic inst;
+            inst.model = model;
+            inst.color = current_color;
+            cylinderInstances_.push_back(inst);
         }
 
         template <typename T>
@@ -627,12 +640,25 @@ namespace ds_internal
         GLfloat uTexScale_ = -1;
         GLint uLightDir_ = -1;
 
+        // バッチ描画（インスタンシング）用基本シェーダプログラム
+        GLuint programBasicInstanced_ = 0;
+        GLint uProjInst_ = -1;
+        GLint uViewInst_ = -1;
+        GLint uLightDirInst_ = -1;
+        GLint uUseTexInst_ = -1;
+        GLint uTexInst_ = -1;
+        GLint uTexScaleInst_ = -1;
+
         // ピラミッド用 VAO/VBO
         GLuint vaoPyramid_ = 0;
         GLuint vboPyramid_ = 0;
 
         // 初期化ヘルパ
         void initBasicProgram();
+        void initBasicInstancedProgram();
+        void setupSphereInstanceAttributes();
+        void setupBoxInstanceAttributes();
+        void setupCylinderInstanceAttributes();
 
         // ground 用 VAO/VBO
         GLuint vaoGround_ = 0;
@@ -678,9 +704,21 @@ namespace ds_internal
         GLint uShadowModel_ = -1;
         GLint uShadowUseTex_ = -1;
 
+        GLuint programShadowInstanced_ = 0;
+        GLint uShadowMVPInst_ = -1;
+        GLint uShadowModelInst_ = -1;
+        GLint uGroundScaleInst_ = -1;
+        GLint uGroundOffsetInst_ = -1;
+        GLint uGroundTexInst_ = -1;
+        GLint uShadowIntensityInst_ = -1;
+        GLint uShadowUseTexInst_ = -1;
+        GLint uGroundColorInst_ = -1;
+
         // 影用の初期化ヘルパ
         void initShadowProjection();
         void initShadowProgram();
+
+        void initShadowInstancedProgram();
 
         // 影描画ヘルパ（後で中身を実装）
         // void drawShadowPrimitive(PrimitiveType type, const glm::mat4 &model);
@@ -716,7 +754,7 @@ namespace ds_internal
         
         // 内部ヘルパー
         void handleEvent(XEvent &event, const dsFunctions *fn);
-        void processDrawFrame(int *frame, const dsFunctions *fn);
+        void processRenderFrame(int *frame, const dsFunctions *fn);
         void platformSimulationLoop(const int window_width, const int window_height, const dsFunctions *fn,
                                     const int initial_pause);
         void createMainWindow(const int width, const int height);

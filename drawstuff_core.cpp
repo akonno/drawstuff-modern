@@ -75,7 +75,6 @@ const char *DEFAULT_PATH_TO_TEXTURES = "../textures/";
 
 namespace
 {
-
     GLuint compileShader(GLenum type, const char *src)
     {
         GLuint shader = glCreateShader(type);
@@ -334,6 +333,15 @@ namespace ds_internal
     constexpr int DS_NUMTEXTURES = 4; // number of standard textures
     std::array<std::unique_ptr<Texture>, DS_NUMTEXTURES + 1> texture;
 
+    // インスタンス描画用バッファ
+    std::vector<InstanceBasic> sphereInstances_;
+    std::vector<InstanceBasic> boxInstances_;
+    std::vector<InstanceBasic> cylinderInstances_;
+
+    GLuint g_sphereInstanceVBO = 0;
+    GLuint g_boxInstanceVBO = 0;
+    GLuint g_cylinderInstanceVBO = 0;
+
     // ================ DrawstuffApp implementation =================
     DrawstuffApp &DrawstuffApp::instance()
     {
@@ -538,6 +546,135 @@ void main()
         glBindVertexArray(0);
 
         glUseProgram(0);
+    }
+    void DrawstuffApp::initBasicInstancedProgram()
+    {
+        // すでに作ってあれば何もしない
+        if (programBasicInstanced_ != 0)
+            return;
+
+        // ライティング付き・インスタンシング対応シェーダ
+        static const char *vsSrc = R"GLSL(
+// basic_instanced.vs
+#version 330 core
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+// インスタンスごとのモデル行列＆色
+layout(location = 2) in mat4 iModel; // 2,3,4,5 を占有
+layout(location = 6) in vec4 iColor;
+
+uniform mat4 uProj;
+uniform mat4 uView;
+
+out vec3 vLocalPos;
+out vec3 vLocalNormal;
+out vec3 vWorldPos;
+out vec3 vWorldNormal;
+out vec4 vColor;
+
+void main()
+{
+    vLocalPos    = aPos;
+    vLocalNormal = aNormal;
+
+    vec4 worldPos4 = iModel * vec4(aPos, 1.0);
+    vWorldPos      = worldPos4.xyz;
+
+    // 非一様スケールがきつい場合は本当は逆転置行列が必要だが、
+    // 今回は簡易版として mat3(iModel) を使用
+    vWorldNormal = mat3(iModel) * aNormal;
+
+    vColor = iColor;
+
+    gl_Position = uProj * uView * worldPos4;
+}
+    )GLSL";
+
+        static const char *fsSrc = R"GLSL(
+// basic_instanced.fs
+#version 330 core
+
+in vec3 vLocalPos;
+in vec3 vLocalNormal;
+in vec3 vWorldNormal;
+in vec3 vWorldPos;
+in vec4 vColor;
+
+uniform sampler2D uTex;
+uniform bool      uUseTex;
+uniform float     uTexScale;   // 例: 0.5f など
+
+uniform vec3 uLightDir; // 光源方向（光源→頂点）
+
+out vec4 FragColor;
+
+void main()
+{
+    vec3 N_tex = normalize(vLocalNormal);
+
+    // ベース色はインスタンスごとの色
+    vec3 base = vColor.rgb;
+
+    if (uUseTex) {
+        // トライプラナー重み
+        vec3 an  = abs(N_tex);
+        float sum = an.x + an.y + an.z + 1e-5;
+        vec3 w   = an / sum;
+
+        // 各軸方向からの投影座標
+        vec2 uvX = vLocalPos.yz * uTexScale; // X向きの面 → YZ平面
+        vec2 uvY = vLocalPos.xz * uTexScale; // Y向きの面 → XZ平面
+        vec2 uvZ = vLocalPos.xy * uTexScale; // Z向きの面 → XY平面
+
+        vec3 texX = texture(uTex, uvX).rgb;
+        vec3 texY = texture(uTex, uvY).rgb;
+        vec3 texZ = texture(uTex, uvZ).rgb;
+
+        vec3 texColor = w.x * texX + w.y * texY + w.z * texZ;
+
+        base *= texColor;
+    }
+
+    // 簡単なディフューズライティング
+    vec3 L = normalize(uLightDir); // 光線方向（光源→頂点）
+    vec3 N_lit = normalize(vWorldNormal);
+
+    const float A = 1.0/3.0;  // 陰側
+    const float B = 2.0/3.0;  // 光源側とのコントラスト
+
+    float diff = max(dot(N_lit, L), 0.0);
+    float lightFactor = A + B * diff;  // 陰側 ≒0.33, 光側=1.0
+
+    vec3 rgb = base * lightFactor;
+
+    FragColor = vec4(rgb, vColor.a);
+}
+    )GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc);
+        if (!vs || !fs)
+        {
+            internalError("Failed to compile basic instanced shaders");
+        }
+
+        programBasicInstanced_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programBasicInstanced_)
+        {
+            internalError("Failed to link basic instanced shader program");
+        }
+
+        // uniform ロケーションを取得
+        uProjInst_ = glGetUniformLocation(programBasicInstanced_, "uProj");
+        uViewInst_ = glGetUniformLocation(programBasicInstanced_, "uView");
+        uLightDirInst_ = glGetUniformLocation(programBasicInstanced_, "uLightDir");
+        uUseTexInst_ = glGetUniformLocation(programBasicInstanced_, "uUseTex");
+        uTexInst_ = glGetUniformLocation(programBasicInstanced_, "uTex");
+        uTexScaleInst_ = glGetUniformLocation(programBasicInstanced_, "uTexScale");
     }
 
     void DrawstuffApp::initGroundProgram()
@@ -906,8 +1043,6 @@ void main()
         if (!use_shadows)
             return;
 
-        initShadowProgram();
-
         glm::mat4 shadowModel = shadowProject_ * model;
         glm::mat4 mvp = proj_ * view_ * shadowModel;
 
@@ -958,6 +1093,104 @@ void main()
 
         glDisable(GL_POLYGON_OFFSET_FILL);
         glUseProgram(0);
+    }
+    void DrawstuffApp::initShadowInstancedProgram()
+    {
+        if (programShadowInstanced_ != 0)
+            return;
+
+        // インスタンス版 shadow.vs
+        static const char *shadow_vs_instanced_src = R"GLSL(
+// shadow_instanced.vs
+#version 330 core
+
+layout(location = 0) in vec3 aPos;
+layout(location = 2) in mat4 iModel; // インスタンスごとのモデル行列
+
+// world → shadow 平面への変換（旧 uShadowModel 相当だが、modelは含まない）
+uniform mat4 uShadowModel;   
+
+// 画面への変換用: proj * view * uShadowModel
+uniform mat4 uShadowMVP;     
+
+uniform vec2 uGroundScale;
+uniform vec2 uGroundOffset;
+
+out vec2 vTex;
+
+void main()
+{
+    // まず通常どおりワールド座標を作る
+    vec4 worldPos = iModel * vec4(aPos, 1.0);
+
+    // 影として地面上に投影された座標（world → shadow平面）
+    vec4 shadowWorld = uShadowModel * worldPos;
+
+    // ground と同じ定義: (x,y) にスケール＋オフセット
+    vTex = shadowWorld.xy * uGroundScale + uGroundOffset;
+
+    // 位置も同じ shadowWorld 由来の uShadowMVP を使う
+    // （CPU側で uShadowMVP = proj * view * uShadowModel としておく前提）
+    gl_Position = uShadowMVP * worldPos;
+}
+)GLSL";
+
+        // FS は既存 shadow.fs と同じでOK
+        static const char *shadow_fs_src = R"GLSL(
+// shadow.fs (インスタンス兼用)
+#version 330 core
+
+in vec2 vTex;
+out vec4 FragColor;
+
+uniform sampler2D uGroundTex;
+uniform float uShadowIntensity;  // 例: 0.5f
+uniform bool  uUseTex;           // テクスチャを使うか
+uniform vec3  uGroundColor;      // テクスチャ無し時の地面色 (GROUND_R,G,B)
+
+void main()
+{
+    vec3 base;
+
+    if (uUseTex) {
+        // テクスチャあり：地面テクスチャをそのままベースに
+        base = texture(uGroundTex, vTex).rgb;
+    } else {
+        // テクスチャなし：地面のフラットカラー
+        base = uGroundColor;
+    }
+
+    // SHADOW_INTENSITY 倍だけ暗くする
+    vec3 shaded = base * uShadowIntensity;
+
+    FragColor = vec4(shaded, 1.0);
+}
+)GLSL";
+
+        GLuint vs = compileShader(GL_VERTEX_SHADER, shadow_vs_instanced_src);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, shadow_fs_src);
+        if (!vs || !fs)
+        {
+            internalError("Failed to compile shadow instanced shaders");
+        }
+
+        programShadowInstanced_ = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        if (!programShadowInstanced_)
+        {
+            internalError("Failed to link shadow instanced shader program");
+        }
+
+        // uniform ロケーション（Inst 用）
+        uShadowMVPInst_ = glGetUniformLocation(programShadowInstanced_, "uShadowMVP");
+        uShadowModelInst_ = glGetUniformLocation(programShadowInstanced_, "uShadowModel");
+        uGroundScaleInst_ = glGetUniformLocation(programShadowInstanced_, "uGroundScale");
+        uGroundOffsetInst_ = glGetUniformLocation(programShadowInstanced_, "uGroundOffset");
+        uGroundTexInst_ = glGetUniformLocation(programShadowInstanced_, "uGroundTex");
+        uShadowIntensityInst_ = glGetUniformLocation(programShadowInstanced_, "uShadowIntensity");
+        uShadowUseTexInst_ = glGetUniformLocation(programShadowInstanced_, "uUseTex");
+        uGroundColorInst_ = glGetUniformLocation(programShadowInstanced_, "uGroundColor");
     }
 
     Display *display = nullptr;
@@ -1272,9 +1505,9 @@ void main()
         XDestroyImage(image);
     }
 
-    void DrawstuffApp::processDrawFrame(int *frame, const dsFunctions *fn)
+    void DrawstuffApp::processRenderFrame(int *frame, const dsFunctions *fn)
     {
-        drawFrame(width, height, fn, pausemode && !singlestep);
+        renderFrame(width, height, fn, pausemode && !singlestep);
         singlestep = 0;
 
         glFlush();
@@ -1351,7 +1584,7 @@ void main()
             if (curr - prev >= 1.0 / 60.0)
             {
                 prev = curr;
-                processDrawFrame(&frame, fn);
+                processRenderFrame(&frame, fn);
             }
             else
                 microsleep(1000);
@@ -2986,7 +3219,9 @@ void main()
         }
 
         // 影（Core パス）
-        drawShadowMesh(meshTriangle_, model);
+        if (use_shadows && solid) {
+            drawShadowMesh(meshTriangle_, model);
+        }
     }
 
     void DrawstuffApp::drawTrianglesBatch(
@@ -3039,6 +3274,179 @@ void main()
         }
     }
 
+    // DrawstuffApp のメンバ関数として
+    void DrawstuffApp::setupSphereInstanceAttributes()
+    {
+        // インスタンス用 VBO がまだなければ作る
+        if (g_sphereInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_sphereInstanceVBO);
+        }
+
+        const GLsizei stride = static_cast<GLsizei>(sizeof(InstanceBasic));
+
+        // 品質ごとに VAO へ同じインスタンス属性を設定
+        for (int sphere_quality_ = 1; sphere_quality_ <= 3; ++sphere_quality_)
+        {
+            Mesh &mesh = meshSphere_[sphere_quality_];
+
+            if (mesh.vao == 0)
+            {
+                // まだメッシュが初期化されていない場合はスキップ
+                continue;
+            }
+
+            glBindVertexArray(mesh.vao);
+
+            // この VAO に対して「インスタンス用 VBO を使う」設定を記録する
+            glBindBuffer(GL_ARRAY_BUFFER, g_sphereInstanceVBO);
+
+            std::size_t offset = 0;
+
+            // layout(location = 2..5) mat4 iModel
+            for (int i = 0; i < 4; ++i)
+            {
+                const GLuint loc = 2 + i;
+                glEnableVertexAttribArray(loc);
+                glVertexAttribPointer(
+                    loc,
+                    4,
+                    GL_FLOAT,
+                    GL_FALSE,
+                    stride,
+                    reinterpret_cast<const void *>(offset));
+
+                // ★ インスタンスごとに 1 つ進める
+                glVertexAttribDivisor(loc, 1);
+
+                offset += sizeof(glm::vec4);
+            }
+
+            // layout(location = 6) vec4 iColor
+            glEnableVertexAttribArray(6);
+            glVertexAttribPointer(
+                6,
+                4,
+                GL_FLOAT,
+                GL_FALSE,
+                stride,
+                reinterpret_cast<const void *>(offsetof(InstanceBasic, color)));
+            glVertexAttribDivisor(6, 1);
+        }
+
+        // 後始末（どの VAO も bind されていない状態に戻す）
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    void DrawstuffApp::setupBoxInstanceAttributes()
+    {
+        glBindVertexArray(meshBox_.vao);
+
+        // インスタンス用 VBO をバインド
+        glBindBuffer(GL_ARRAY_BUFFER, g_boxInstanceVBO);
+
+        GLsizei stride = sizeof(InstanceBasic);
+        std::size_t offset = 0;
+
+        // layout(location = 2..5) mat4 iModel
+        for (int i = 0; i < 4; ++i)
+        {
+            GLuint loc = 2 + i;
+            glEnableVertexAttribArray(loc);
+            glVertexAttribPointer(
+                loc,
+                4,
+                GL_FLOAT,
+                GL_FALSE,
+                stride,
+                reinterpret_cast<const void *>(offset));
+            glVertexAttribDivisor(loc, 1); // ★ インスタンスごとに1回進める
+            offset += sizeof(glm::vec4);
+        }
+
+        // layout(location = 6) vec4 iColor
+        glEnableVertexAttribArray(6);
+        glVertexAttribPointer(
+            6,
+            4,
+            GL_FLOAT,
+            GL_FALSE,
+            stride,
+            reinterpret_cast<const void *>(offsetof(InstanceBasic, color)));
+        glVertexAttribDivisor(6, 1);
+
+        glBindVertexArray(0);
+    }
+    // どこかにある前提
+    // extern GLuint g_cylinderInstanceVBO;
+    // extern Mesh   meshCylinder_[/* quality index */];
+
+    void DrawstuffApp::setupCylinderInstanceAttributes()
+    {
+        // インスタンス用 VBO がまだなければ作る
+        if (g_cylinderInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_cylinderInstanceVBO);
+        }
+
+        const GLsizei stride = static_cast<GLsizei>(sizeof(InstanceBasic));
+
+        // 品質ごとに VAO へ同じインスタンス属性を設定
+        // ※ 範囲 1..3 はあなたの環境に合わせて変更可
+        for (int cylinder_quality_ = 1; cylinder_quality_ <= 3; ++cylinder_quality_)
+        {
+            Mesh &mesh = meshCylinder_[cylinder_quality_];
+
+            if (mesh.vao == 0)
+            {
+                // まだメッシュが初期化されていない場合はスキップ
+                continue;
+            }
+
+            glBindVertexArray(mesh.vao);
+
+            // この VAO に対して「インスタンス用 VBO を使う」設定を記録する
+            glBindBuffer(GL_ARRAY_BUFFER, g_cylinderInstanceVBO);
+
+            std::size_t offset = 0;
+
+            // layout(location = 2..5) mat4 iModel
+            for (int i = 0; i < 4; ++i)
+            {
+                const GLuint loc = 2 + i;
+                glEnableVertexAttribArray(loc);
+                glVertexAttribPointer(
+                    loc,
+                    4,
+                    GL_FLOAT,
+                    GL_FALSE,
+                    stride,
+                    reinterpret_cast<const void *>(offset));
+
+                // インスタンスごとに 1 つ進める
+                glVertexAttribDivisor(loc, 1);
+
+                offset += sizeof(glm::vec4);
+            }
+
+            // layout(location = 6) vec4 iColor
+            glEnableVertexAttribArray(6);
+            glVertexAttribPointer(
+                6,
+                4,
+                GL_FLOAT,
+                GL_FALSE,
+                stride,
+                reinterpret_cast<const void *>(offsetof(InstanceBasic, color)));
+            glVertexAttribDivisor(6, 1);
+        }
+
+        // 後始末（どの VAO も bind されていない状態に戻す）
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
     void DrawstuffApp::startGraphics(const int width, const int height, const dsFunctions *fn)
     {
         const char *prefix = DEFAULT_PATH_TO_TEXTURES;
@@ -3049,6 +3457,10 @@ void main()
         gladLoadGL();
 
         initBasicProgram();
+        initBasicInstancedProgram();
+
+        initShadowProgram();
+        initShadowInstancedProgram();
 
         createPrimitiveMeshes();
 
@@ -3067,6 +3479,31 @@ void main()
 
         std::string checkeredpath = std::string(prefix) + "/checkered.ppm";
         texture[DS_CHECKERED] = std::make_unique<Texture>(checkeredpath.c_str());
+
+        // 基本形状描画用バッファ初期化
+        constexpr std::size_t initialInstanceBufferSize = 1024*128;
+        sphereInstances_.clear();
+        sphereInstances_.reserve(initialInstanceBufferSize);
+        boxInstances_.clear();
+        boxInstances_.reserve(initialInstanceBufferSize);
+        cylinderInstances_.clear();
+        cylinderInstances_.reserve(initialInstanceBufferSize);
+
+        if (g_sphereInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_sphereInstanceVBO);
+        }
+        if (g_boxInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_boxInstanceVBO);
+        }
+        if (g_cylinderInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_cylinderInstanceVBO);
+        }
+        setupSphereInstanceAttributes();
+        setupBoxInstanceAttributes();
+        setupCylinderInstanceAttributes();
     }
 
     void DrawstuffApp::stopGraphics()
@@ -3076,14 +3513,37 @@ void main()
             texture[i].reset();
         }
     }
-    void DrawstuffApp::drawFrame(const int width,
+
+    void uploadInstanceBuffer(GLuint &vbo, const std::vector<InstanceBasic> &instances)
+    {
+        if (vbo == 0)
+        {
+            // 念のため。初期化し忘れていた場合に備えるならこう。
+            glGenBuffers(1, &vbo);
+        }
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
+        const GLsizeiptr bytes =
+            static_cast<GLsizeiptr>(instances.size() * sizeof(InstanceBasic));
+
+        // インスタンスが0個のときでも、一応バッファサイズ0で呼んでおくか、
+        // 早期returnするかは好み。ここではそのまま流す。
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            bytes,
+            instances.empty() ? nullptr : instances.data(),
+            GL_STREAM_DRAW); // 毎フレーム書き換えるので STREAM_DRAW / DYNAMIC_DRAW が無難
+    }
+
+    void DrawstuffApp::renderFrame(const int width,
                                  const int height,
                                  const dsFunctions *fn,
                                  const int pause)
     {
         if (current_state == SIM_STATE_NOT_STARTED)
         {
-            internalError("drawFrame: internal error; called before startGraphics()");
+            internalError("renderFrame: internal error; called before startGraphics()");
         }
         else if (current_state == SIM_STATE_FINISHED)
         {
@@ -3182,6 +3642,145 @@ void main()
         {
             fn->step(pause);
         }
+
+        // ---- 球，直方体，円柱のバッチ描画パス ----
+        glUseProgram(programBasicInstanced_);
+
+        glUniformMatrix4fv(uProjInst_, 1, GL_FALSE, glm::value_ptr(proj_));
+        glUniformMatrix4fv(uViewInst_, 1, GL_FALSE, glm::value_ptr(view_));
+        glUniform3f(uLightDirInst_, lightDir_.x, lightDir_.y, lightDir_.z);
+        glUniform1f(uTexScaleInst_, 0.5f);
+
+        if (use_textures && texture[DS_WOOD])
+        {
+            glUniform1i(uUseTexInst_, GL_TRUE);
+            glActiveTexture(GL_TEXTURE0);
+            bindTextureUnit0(DS_WOOD);
+            glUniform1i(uTexInst_, 0);
+        }
+        else
+        {
+            glUniform1i(uUseTexInst_, GL_FALSE);
+        }
+
+        if (!sphereInstances_.empty())
+        {
+            // 球をまとめて描画
+            uploadInstanceBuffer(g_sphereInstanceVBO, sphereInstances_); // VBO or SSBO
+            glBindVertexArray(meshSphere_[sphere_quality].vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshSphere_[sphere_quality].indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(sphereInstances_.size()));
+        }
+        if (!boxInstances_.empty())
+        {
+            // 直方体をまとめて描画
+            uploadInstanceBuffer(g_boxInstanceVBO, boxInstances_); // VBO or SSBO
+            glBindVertexArray(meshBox_.vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshBox_.indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(boxInstances_.size()));
+        }
+        if (!cylinderInstances_.empty())
+        {
+            // 円柱をまとめて描画
+            uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_); // VBO or SSBO
+            glBindVertexArray(meshCylinder_[cylinder_quality].vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshCylinder_[cylinder_quality].indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(cylinderInstances_.size()));
+        }
+
+        if (use_shadows)
+        {
+            glUseProgram(programShadowInstanced_);
+
+            // Z-fighting 対策（★必須）
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.0f, -1.0f);
+
+            // 影は上書き型なら blend off
+            glDisable(GL_BLEND);
+
+            // 共通行列
+            glUniformMatrix4fv(uShadowModelInst_, 1, GL_FALSE, glm::value_ptr(shadowProject_)); // world→shadow
+            glm::mat4 shadowMVP = proj_ * view_ * shadowProject_;
+            glUniformMatrix4fv(uShadowMVPInst_, 1, GL_FALSE, glm::value_ptr(shadowMVP));
+
+            glUniform2f(uGroundScaleInst_, ground_scale, ground_scale);
+            glUniform2f(uGroundOffsetInst_, ground_ofsx, ground_ofsy);
+            glUniform1f(uShadowIntensityInst_, SHADOW_INTENSITY);
+
+            if (use_textures)
+            {
+                glUniform1i(uShadowUseTexInst_, GL_TRUE);
+                glActiveTexture(GL_TEXTURE0);
+                bindTextureUnit0(DS_GROUND);
+                glUniform1i(uGroundTexInst_, 0);
+            }
+            else
+            {
+                glUniform1i(uShadowUseTexInst_, GL_FALSE);
+                glUniform3f(uGroundColor_, GROUND_R, GROUND_G, GROUND_B);
+            }
+
+            // 球の影
+            if (!sphereInstances_.empty())
+            {
+                uploadInstanceBuffer(g_sphereInstanceVBO, sphereInstances_);
+                glBindVertexArray(meshSphere_[sphere_quality].vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshSphere_[sphere_quality].indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(sphereInstances_.size()));
+            }
+            if (!boxInstances_.empty())
+            {
+                // 直方体の影
+                uploadInstanceBuffer(g_boxInstanceVBO, boxInstances_);
+                glBindVertexArray(meshBox_.vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshBox_.indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(boxInstances_.size()));
+            }
+            if (!cylinderInstances_.empty())
+            {
+                // 円柱の影
+                uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_);
+                glBindVertexArray(meshCylinder_[cylinder_quality].vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshCylinder_[cylinder_quality].indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(cylinderInstances_.size()));
+            }
+        }
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glBindVertexArray(0);
+        glUseProgram(0);
+
+        // インスタンスバッファをクリア
+        sphereInstances_.clear();
+        boxInstances_.clear();
+        cylinderInstances_.clear();
 
         current_state = SIM_STATE_RUNNING;
     }
