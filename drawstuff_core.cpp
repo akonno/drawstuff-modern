@@ -3100,7 +3100,6 @@ void main()
     {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
-        glDisable(GL_FOG);
 
         initGroundMesh();
 
