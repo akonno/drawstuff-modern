@@ -85,6 +85,9 @@ namespace
 
 } // anonymous namespace
 
+// TriMesh 用高速描画 API 用
+using MeshHandle = unsigned int;
+
 namespace ds_internal
 {
     enum SimulationState
@@ -176,10 +179,17 @@ namespace ds_internal
         bool getUseShadows() const { return use_shadows; }
         void setUseShadows(const bool us) { use_shadows = us; }
 
-        
-
         // 状態チェック用
         bool isInsideSimulationLoop() const { return current_state == SIM_STATE_RUNNING || current_state == SIM_STATE_DRAWING; }
+
+        // TriMesh 用高速描画 API
+        MeshHandle registerIndexedMesh(
+            const std::vector<float> &vertices,
+            const std::vector<unsigned int> &indices);
+
+        void drawRegisteredMesh(
+            const MeshHandle h,
+            const float pos[3], const float R[12], const bool solid = true);
 
         // テンプレート関数群
         template <typename T>
@@ -857,5 +867,8 @@ namespace ds_internal
             // 念のため：2 頂点
             meshLine_.indexCount = 2;
         }
+
+        // TriMesh 用高速描画 API 実装
+        std::vector<std::unique_ptr<Mesh>> meshRegistry_;
     };
 } // namespace ds_internal

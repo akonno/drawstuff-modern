@@ -442,3 +442,40 @@ extern "C" void dsPause()
     auto &app = ds_internal::DrawstuffApp::instance();
     app.togglePauseMode();
 }
+
+// ========== Additional functions for fast drawing of trimeshes ===========
+// These functions are not part of the original drawstuff API.
+// They are provided for efficiency when drawing large numbers of
+// triangles, e.g., from a trimesh collision object.
+// ========================================================================
+extern "C" dsMeshHandle dsRegisterIndexedMesh(
+    const std::vector<float> &vertices, const std::vector<unsigned int> &indices)
+{
+    dsMeshHandle h;
+    
+    // フラット配列 → std::vector に詰め直し
+    std::vector<float> v(vertices);
+    std::vector<unsigned int> idx(indices);
+
+    h.id = with_app_or_default(
+        [v, idx](ds_internal::DrawstuffApp &app)
+        {
+            return app.registerIndexedMesh(v, idx);
+        }, 0 // エラーのときの無効値
+    );
+    return h;
+}
+
+extern "C" void dsDrawRegisteredMesh(
+    const dsMeshHandle handle,
+    const float pos[3], const float R[12],
+    const bool solid)
+{
+    with_app(
+        [handle, pos, R, solid](ds_internal::DrawstuffApp &app)
+        {
+            app.drawRegisteredMesh(handle.id, pos, R, solid);
+        });
+}
+
+// ========================================================================

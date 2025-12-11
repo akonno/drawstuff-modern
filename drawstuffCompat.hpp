@@ -378,6 +378,28 @@ extern "C"
     /* Pause the simulation (appended by KONNO Akihisa <konno@researchers.jp>) */
     DS_API void dsPause(void);
 
+    // ========== Additional functions for fast drawing of trimeshes ===========
+    // These functions are not part of the original drawstuff API.
+    // They are provided for efficiency when drawing large numbers of
+    // triangles, e.g., from a trimesh collision object.
+    // ========================================================================
+    struct dsMeshHandle
+    {
+        GLuint id = 0; // 0 = invalid
+        bool isValid() const { return id != 0; }
+    };
+
+    // Register a mesh given vertices and triangle indices.
+    // The vertices array is a flat array of x,y,z coordinates.
+    // The indices array contains triangle vertex indices (3 per triangle).
+    // Returns a handle that can be used to draw the mesh later.
+    dsMeshHandle dsRegisterIndexedMesh(
+        const std::vector<float> &vertices, const std::vector<unsigned int> &indices);
+
+    void dsDrawRegisteredMesh(
+        dsMeshHandle handle,
+        const float pos[3], const float R[12], const bool solid = true);
+    
 /* closing bracket for extern "C" */
 #ifdef __cplusplus
 }

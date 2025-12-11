@@ -2343,6 +2343,340 @@ void main()
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
+    // 三角形メッシュ高速描画用ユーティリティ
+    struct MeshPN
+    {
+        std::vector<VertexPN> vertices; // pos + normal
+        std::vector<uint32_t> indices;  // 0-based index
+    };
+
+    // スムーズシェーディング用メッシュ構築
+    MeshPN buildSmoothVertexPNFromVerticesAndIndices(
+        const std::vector<float> &vertices,   // x0,y0,z0,x1,y1,z1,x2,y2,z2,...
+        const std::vector<uint32_t> &indices) // tr0_i0,tr0_i1,tr0_i2, tr1_i0,...
+    {
+        MeshPN result;
+
+        const std::size_t numVerts = vertices.size() / 3;
+        const std::size_t numIndices = indices.size();
+
+        result.vertices.resize(numVerts);
+        result.indices = indices; // スムーズ版ではインデックスはそのままコピー
+
+        // 1. float配列 → VertexPN配列（法線は0で初期化）
+        for (std::size_t i = 0; i < numVerts; ++i)
+        {
+            result.vertices[i].pos = glm::vec3(
+                vertices[3 * i + 0],
+                vertices[3 * i + 1],
+                vertices[3 * i + 2]);
+            result.vertices[i].normal = glm::vec3(0.0f);
+        }
+
+        // 2. 面法線を各頂点に加算（スムーズシェーディング用）
+        for (std::size_t t = 0; t + 2 < numIndices; t += 3)
+        {
+            uint32_t i0 = result.indices[t + 0];
+            uint32_t i1 = result.indices[t + 1];
+            uint32_t i2 = result.indices[t + 2];
+
+            // 念のため範囲チェック（本番では assert でもよい）
+            if (i0 >= numVerts || i1 >= numVerts || i2 >= numVerts)
+                continue;
+
+            const glm::vec3 &p0 = result.vertices[i0].pos;
+            const glm::vec3 &p1 = result.vertices[i1].pos;
+            const glm::vec3 &p2 = result.vertices[i2].pos;
+
+            glm::vec3 U = p1 - p0;
+            glm::vec3 V = p2 - p0;
+            glm::vec3 N = glm::cross(U, V); // 正規化はあとでまとめて
+
+            result.vertices[i0].normal += N;
+            result.vertices[i1].normal += N;
+            result.vertices[i2].normal += N;
+        }
+
+        // 3. 各頂点の法線を正規化
+        for (std::size_t i = 0; i < numVerts; ++i)
+        {
+            glm::vec3 &n = result.vertices[i].normal;
+            const float len2 = glm::dot(n, n);
+            if (len2 > 0.0f)
+            {
+                n = glm::normalize(n);
+            }
+            else
+            {
+                // 万一孤立頂点があれば、とりあえず上向きなどにしておく
+                n = glm::vec3(0.0f, 1.0f, 0.0f);
+            }
+        }
+
+        return result;
+    }
+    struct CornerRef
+    {
+        uint32_t tri;   // 三角形インデックス（0..numTris-1）
+        uint8_t corner; // 0,1,2 のどの頂点か
+    };
+
+    // クリース角（折り目）付きメッシュ構築
+    MeshPN buildCreasedVertexPNFromVerticesAndIndices(
+        const std::vector<float> &vertices,   // x,y,z,...
+        const std::vector<uint32_t> &indices, // 0-based index, 3つで1三角形
+        const float creaseAngleDegrees)
+    {
+        MeshPN result;
+
+        const std::size_t numVerts = vertices.size() / 3;
+        const std::size_t numIndices = indices.size();
+        const std::size_t numTris = numIndices / 3;
+
+        if (numVerts == 0 || numTris == 0)
+        {
+            // 空メッシュ
+            return result;
+        }
+
+        // 0. 元の頂点位置だけ確保（法線はあとで作る）
+        std::vector<glm::vec3> positions(numVerts);
+        for (std::size_t i = 0; i < numVerts; ++i)
+        {
+            positions[i] = glm::vec3(
+                vertices[3 * i + 0],
+                vertices[3 * i + 1],
+                vertices[3 * i + 2]);
+        }
+
+        // 1. 三角形ごとの面法線（単位ベクトル）を計算
+        std::vector<glm::vec3> faceNormals(numTris);
+
+        for (std::size_t t = 0; t < numTris; ++t)
+        {
+            uint32_t i0 = indices[3 * t + 0];
+            uint32_t i1 = indices[3 * t + 1];
+            uint32_t i2 = indices[3 * t + 2];
+
+            if (i0 >= numVerts || i1 >= numVerts || i2 >= numVerts)
+            {
+                faceNormals[t] = glm::vec3(0.0f, 1.0f, 0.0f); // 保険
+                continue;
+            }
+
+            const glm::vec3 &p0 = positions[i0];
+            const glm::vec3 &p1 = positions[i1];
+            const glm::vec3 &p2 = positions[i2];
+
+            glm::vec3 U = p1 - p0;
+            glm::vec3 V = p2 - p0;
+            glm::vec3 N = glm::cross(U, V);
+            float len2 = glm::dot(N, N);
+            if (len2 > 0.0f)
+            {
+                N = glm::normalize(N);
+            }
+            else
+            {
+                N = glm::vec3(0.0f, 1.0f, 0.0f); // 保険
+            }
+            faceNormals[t] = N;
+        }
+
+        // 2. 各頂点に接続する「三角形の corner の一覧」を作る
+        std::vector<std::vector<CornerRef>> adjacency(numVerts);
+        adjacency.assign(numVerts, {}); // 明示初期化
+
+        for (std::size_t t = 0; t < numTris; ++t)
+        {
+            for (uint8_t c = 0; c < 3; ++c)
+            {
+                uint32_t vi = indices[3 * t + c];
+                if (vi >= numVerts)
+                    continue;
+                adjacency[vi].push_back(CornerRef{static_cast<uint32_t>(t), c});
+            }
+        }
+
+        // 3. しきい値（cosθ）を計算
+        const float creaseRad = glm::radians(creaseAngleDegrees);
+        const float cosThreshold = std::cos(creaseRad);
+        // 角度が小さい(=cosが大きい)もの同士は同じクラスタにまとめる。
+        // 例: crease=60° → cos≈0.5 → 60°未満は同一クラスタ。
+
+        // 出力側のバッファはここで構築する
+        result.indices.resize(numIndices); // 三角形数は変わらない
+
+        // 4. 頂点ごとに面法線をクラスタリングして、頂点を複製しつつ indices を書き換える
+        result.vertices.clear();
+        result.vertices.reserve(numVerts); // おおよその大きさ（エッジが多いと増える）
+
+        for (std::size_t v = 0; v < numVerts; ++v)
+        {
+            const auto &corners = adjacency[v];
+
+            if (corners.empty())
+            {
+                // この頂点はどの三角形にも使われていない → スキップ
+                continue;
+            }
+
+            // クラスタ構造体
+            struct Cluster
+            {
+                glm::vec3 normalAccum;
+                glm::vec3 repNormal; // 代表法線（正規化済み）
+                std::vector<CornerRef> members;
+            };
+
+            std::vector<Cluster> clusters;
+
+            for (const CornerRef &cr : corners)
+            {
+                const glm::vec3 &nFace = faceNormals[cr.tri];
+
+                int bestIndex = -1;
+                float bestDot = -1.0f;
+
+                // 既存クラスタのどれと一番近いかを探す
+                for (std::size_t ci = 0; ci < clusters.size(); ++ci)
+                {
+                    float d = glm::dot(nFace, clusters[ci].repNormal);
+                    if (d > bestDot)
+                    {
+                        bestDot = d;
+                        bestIndex = static_cast<int>(ci);
+                    }
+                }
+
+                if (bestIndex < 0 || bestDot < cosThreshold)
+                {
+                    // 新しいクラスタを作る
+                    Cluster c;
+                    c.normalAccum = nFace;
+                    c.repNormal = nFace; // unit なのでそのまま代表に
+                    c.members.push_back(cr);
+                    clusters.push_back(c);
+                }
+                else
+                {
+                    // 既存クラスタに追加
+                    Cluster &c = clusters[bestIndex];
+                    c.normalAccum += nFace;
+                    c.members.push_back(cr);
+
+                    // 代表法線を更新（normalAccumを正規化）
+                    float len2 = glm::dot(c.normalAccum, c.normalAccum);
+                    if (len2 > 0.0f)
+                    {
+                        c.repNormal = glm::normalize(c.normalAccum);
+                    }
+                }
+            }
+
+            // できたクラスタごとに「新しい頂点」を作り、インデックスを書き換える
+            for (const Cluster &c : clusters)
+            {
+                VertexPN newV;
+                newV.pos = positions[v];
+
+                float len2 = glm::dot(c.normalAccum, c.normalAccum);
+                if (len2 > 0.0f)
+                {
+                    newV.normal = glm::normalize(c.normalAccum);
+                }
+                else
+                {
+                    newV.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+
+                // このクラスタ用の新しい頂点インデックス
+                const uint32_t newIndex =
+                    static_cast<uint32_t>(result.vertices.size());
+                result.vertices.push_back(newV);
+
+                // このクラスタに属する corner について indices を置き換える
+                for (const CornerRef &cr : c.members)
+                {
+                    result.indices[3 * cr.tri + cr.corner] = newIndex;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    void buildTrianglesMeshFromVertexPN(
+        Mesh &outMesh,
+        const std::vector<VertexPN> &verts,
+        const std::vector<uint32_t> &indices)
+    {
+        // 既存リソースの破棄
+        if (outMesh.vao)
+        {
+            glDeleteVertexArrays(1, &outMesh.vao);
+            outMesh.vao = 0;
+        }
+        if (outMesh.vbo)
+        {
+            glDeleteBuffers(1, &outMesh.vbo);
+            outMesh.vbo = 0;
+        }
+        if (outMesh.ebo)
+        {
+            glDeleteBuffers(1, &outMesh.ebo);
+            outMesh.ebo = 0;
+        }
+
+        // VAO/VBO/EBO 設定
+        glGenVertexArrays(1, &outMesh.vao);
+        glBindVertexArray(outMesh.vao);
+
+        glGenBuffers(1, &outMesh.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, outMesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     verts.size() * sizeof(VertexPN),
+                     verts.data(),
+                     GL_STATIC_DRAW);
+
+        glGenBuffers(1, &outMesh.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, outMesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, pos)));
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE,
+            sizeof(VertexPN),
+            reinterpret_cast<void *>(offsetof(VertexPN, normal)));
+
+        outMesh.indexCount = static_cast<GLsizei>(indices.size());
+        outMesh.primitive = GL_TRIANGLES;
+
+        glBindVertexArray(0);
+    }
+
+    void buildTrianglesMeshFromVerticesAndIndices(
+        Mesh &outMesh,
+        const std::vector<float> &vertices,   // x,y,z,...
+        const std::vector<uint32_t> &indices) // 0-based index
+    {
+        // スムーズシェーディング版の VertexPN＋indices を構築
+        // MeshPN meshPN = buildSmoothVertexPNFromVerticesAndIndices(vertices, indices);
+        // 折り目付きシェーディング版の VertexPN＋indices を構築
+        MeshPN meshPN = buildCreasedVertexPNFromVerticesAndIndices(vertices, indices, 60.0f);
+        // OpenGL の VAO/VBO/EBO を構築
+        buildTrianglesMeshFromVertexPN(outMesh, meshPN.vertices, meshPN.indices);
+    }
+
     void DrawstuffApp::createPrimitiveMeshes()
     {
         // 頂点配列: position + normal (+ texcoord)
@@ -2843,6 +3177,46 @@ void main()
         if (fn && fn->step)
         {
             fn->step(pause);
+        }
+    }
+
+    // TriMesh高速描画API
+    // メッシュ登録
+    MeshHandle DrawstuffApp::registerIndexedMesh(
+        const std::vector<float> &vertices,
+        const std::vector<unsigned int> &indices)
+    {
+        auto mesh = std::make_unique<Mesh>();
+        buildTrianglesMeshFromVerticesAndIndices(
+            *mesh, vertices, indices);
+        meshRegistry_.push_back(std::move(mesh));
+
+        return static_cast<MeshHandle>(meshRegistry_.size() - 1);
+    }
+
+    void DrawstuffApp::drawRegisteredMesh(
+        MeshHandle h,
+        const float pos[3], const float R[12], const bool solid)
+    {
+        Mesh *m = meshRegistry_[h].get();
+
+        const float scale[3] = {1.f, 1.f, 1.f};
+        glm::mat4 model = buildModelMatrix(pos, R, scale);
+
+        applyMaterials(); // 色・ブレンドなど
+        if (!solid)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        }
+        drawMeshBasic(*m, model, current_color);
+        if (!solid)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        if (use_shadows)
+        {
+            drawShadowMesh(*m, model);
         }
     }
 
