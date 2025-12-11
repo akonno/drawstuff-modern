@@ -94,7 +94,8 @@ namespace ds_internal
     {
         SIM_STATE_NOT_STARTED = 0,
         SIM_STATE_RUNNING = 1,
-        SIM_STATE_DRAWING = 2
+        SIM_STATE_DRAWING = 2,
+        SIM_STATE_FINISHED = 3
     };
 
     struct VertexPN
@@ -240,7 +241,7 @@ namespace ds_internal
             }
             applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
-            glm::mat4 model = buildModelMatrix(pos, R, sides);
+            glm::mat4 model = buildModelMatrix(pos, R, {sides[0], sides[1], sides[2]});
 
             // 本体（Core パス）
             drawMeshBasic(meshBox_, model, current_color);
@@ -266,8 +267,7 @@ namespace ds_internal
 
             applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
-            const T sides[3] = { radius, radius, radius };
-            glm::mat4 model = buildModelMatrix(pos, R, sides);
+            glm::mat4 model = buildModelMatrix(pos, R, {radius, radius, radius});
 
             // 本体（Core パス）
             drawMeshBasic(meshSphere_[sphere_quality], model, current_color);
@@ -296,8 +296,7 @@ namespace ds_internal
             float r = static_cast<float>(radius); // 半径
 
             // ODE の姿勢・位置（スケールはここでは使わない）
-            const T scaleXYZ[3] = {1.0, 1.0, 1.0};
-            glm::mat4 W = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 W = buildModelMatrix(pos, R);
 
             // ---- 円筒部 ----
             // unit cylinder: 半径1, z∈[-1,1]
@@ -356,8 +355,7 @@ namespace ds_internal
 
             applyMaterials(); // ライティングやカリングなど、既存の状態設定
 
-            const T scaleXYZ[3] = {radius, radius, length};
-            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 model = buildModelMatrix(pos, R, {radius, radius, length});
 
             // 本体（Core パス）
             drawMeshBasic(meshCylinder_[cylinder_quality], model, current_color);
@@ -383,8 +381,7 @@ namespace ds_internal
             applyMaterials();
 
             // 1つの drawTriangles 呼び出しの中では pos,R は共通
-            const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
-            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 model = buildModelMatrix(pos, R);
 
             // ---- ここからバッチ処理 ----
 
@@ -439,8 +436,7 @@ namespace ds_internal
 
             applyMaterials();
 
-            const T scaleXYZ[3] = {1.0f, 1.0f, 1.0f};
-            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 model = buildModelMatrix(pos, R);
             glm::mat4 mvp = proj_ * view_ * model;
 
             glUseProgram(programBasic_);
@@ -471,10 +467,7 @@ namespace ds_internal
             applyMaterials();
 
             // Convex はローカル座標で定義されているので scale=1
-            const T scaleXYZ[3] = {static_cast<T>(1.0),
-                                   static_cast<T>(1.0),
-                                   static_cast<T>(1.0)};
-            glm::mat4 model = buildModelMatrix(pos, R, scaleXYZ);
+            glm::mat4 model = buildModelMatrix(pos, R);
 
             // ---- Convex → 三角形バッチへの変換 ----
 
@@ -758,7 +751,8 @@ namespace ds_internal
         // テンプレート関数群
         template <typename T>
         glm::mat4 buildModelMatrix(
-            const T pos[3], const T R[12], const T sides[3])
+            const T pos[3], const T R[12],
+            glm::vec3 sides = glm::vec3(1.0f))
         {
             glm::mat4 model(1.0f);
 

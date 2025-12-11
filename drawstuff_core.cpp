@@ -1172,7 +1172,7 @@ void main()
                 event.xclient.format == 32 &&
                 Atom(event.xclient.data.l[0]) == wm_delete_window_atom)
             {
-                current_state = SIM_STATE_NOT_STARTED;
+                current_state = SIM_STATE_FINISHED;
                 return;
             }
             return;
@@ -1401,7 +1401,7 @@ void main()
         initMotionModel();
         platformSimulationLoop(window_width, window_height, callbacks_, initial_pause);
 
-        current_state = SIM_STATE_NOT_STARTED;
+        current_state = SIM_STATE_FINISHED;
 
         return 0;
     }
@@ -1414,7 +1414,7 @@ void main()
             fatalError(s.c_str());
             return;
         }
-        current_state = SIM_STATE_NOT_STARTED; // stopping
+        current_state = SIM_STATE_FINISHED; // stopping
     }
 
     void DrawstuffApp::wrapCameraAngles()
@@ -3083,7 +3083,12 @@ void main()
     {
         if (current_state == SIM_STATE_NOT_STARTED)
         {
-            internalError("internal error");
+            internalError("drawFrame: internal error; called before startGraphics()");
+        }
+        else if (current_state == SIM_STATE_FINISHED)
+        {
+            // This might happen if too many objects are drawn in one frame.
+            return;
         }
         current_state = SIM_STATE_DRAWING;
 
@@ -3201,8 +3206,7 @@ void main()
     {
         Mesh *m = meshRegistry_[h].get();
 
-        const float scale[3] = {1.f, 1.f, 1.f};
-        glm::mat4 model = buildModelMatrix(pos, R, scale);
+        glm::mat4 model = buildModelMatrix(pos, R);
 
         applyMaterials(); // 色・ブレンドなど
         if (!solid)
