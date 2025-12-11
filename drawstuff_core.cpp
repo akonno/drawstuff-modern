@@ -972,7 +972,6 @@ void main()
     int width = 0, height = 0;  // window size
     GLXContext glx_context = 0; // openGL rendering context
     int last_key_pressed = 0;   // last key pressed in the window
-    int run = 1;                // 1 if simulation running
     int pausemode = 0;          // 1 if in `pause' mode
     int singlestep = 0;         // 1 if single step key pressed
     int writeframes = 0;        // 1 if frame files to be written
@@ -1173,7 +1172,7 @@ void main()
                 event.xclient.format == 32 &&
                 Atom(event.xclient.data.l[0]) == wm_delete_window_atom)
             {
-                run = 0;
+                current_state = SIM_STATE_NOT_STARTED;
                 return;
             }
             return;
@@ -1337,12 +1336,11 @@ void main()
         double prev = tv.tv_sec + (double)tv.tv_usec / 1000000.0;
 
         int frame = 1;
-        run = 1;
-        while (run)
+        while (current_state == SIM_STATE_RUNNING)
         {
             // read in and process all pending events for the main window
             XEvent event;
-            while (run && XPending(display))
+            while (current_state == SIM_STATE_RUNNING && XPending(display))
             {
                 XNextEvent(display, &event);
                 handleEvent(event, fn);
@@ -1412,10 +1410,11 @@ void main()
     {
         if (current_state != SIM_STATE_RUNNING)
         {
-            fatalError("DrawstuffApp::stopSimulation() called without a running simulation");
+            std::string s = "DrawstuffApp::stopSimulation() called without a running simulation. Current_state = " + std::to_string(static_cast<int>(current_state));
+            fatalError(s.c_str());
             return;
         }
-        current_state = SIM_STATE_DRAWING; // stopping
+        current_state = SIM_STATE_NOT_STARTED; // stopping
     }
 
     void DrawstuffApp::wrapCameraAngles()
@@ -3178,6 +3177,8 @@ void main()
         {
             fn->step(pause);
         }
+
+        current_state = SIM_STATE_RUNNING;
     }
 
     // TriMesh高速描画API
