@@ -3643,6 +3643,22 @@ void main()
         }
 
         // ---- 球，直方体，円柱のバッチ描画パス ----
+        if (!sphereInstances_.empty())
+        {
+            // インスタンスバッファを GPU にアップロード
+            uploadInstanceBuffer(g_sphereInstanceVBO, sphereInstances_); // VBO or SSBO
+        }
+        if (!boxInstances_.empty())
+        {
+            // インスタンスバッファを GPU にアップロード
+            uploadInstanceBuffer(g_boxInstanceVBO, boxInstances_); // VBO or SSBO
+        }
+        if (!cylinderInstances_.empty())
+        {
+            // インスタンスバッファを GPU にアップロード
+            uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_); // VBO or SSBO
+        }
+
         glUseProgram(programBasicInstanced_);
 
         glUniformMatrix4fv(uProjInst_, 1, GL_FALSE, glm::value_ptr(proj_));
@@ -3665,7 +3681,6 @@ void main()
         if (!sphereInstances_.empty())
         {
             // 球をまとめて描画
-            uploadInstanceBuffer(g_sphereInstanceVBO, sphereInstances_); // VBO or SSBO
             glBindVertexArray(meshSphere_[sphere_quality].vao);
             glDrawElementsInstanced(
                 GL_TRIANGLES,
@@ -3677,7 +3692,6 @@ void main()
         if (!boxInstances_.empty())
         {
             // 直方体をまとめて描画
-            uploadInstanceBuffer(g_boxInstanceVBO, boxInstances_); // VBO or SSBO
             glBindVertexArray(meshBox_.vao);
             glDrawElementsInstanced(
                 GL_TRIANGLES,
@@ -3689,7 +3703,6 @@ void main()
         if (!cylinderInstances_.empty())
         {
             // 円柱をまとめて描画
-            uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_); // VBO or SSBO
             glBindVertexArray(meshCylinder_[cylinder_quality].vao);
             glDrawElementsInstanced(
                 GL_TRIANGLES,
@@ -3738,7 +3751,6 @@ void main()
             // 球の影
             if (!sphereInstances_.empty())
             {
-                uploadInstanceBuffer(g_sphereInstanceVBO, sphereInstances_);
                 glBindVertexArray(meshSphere_[sphere_quality].vao);
                 glDrawElementsInstanced(
                     GL_TRIANGLES,
@@ -3750,7 +3762,6 @@ void main()
             if (!boxInstances_.empty())
             {
                 // 直方体の影
-                uploadInstanceBuffer(g_boxInstanceVBO, boxInstances_);
                 glBindVertexArray(meshBox_.vao);
                 glDrawElementsInstanced(
                     GL_TRIANGLES,
@@ -3762,7 +3773,6 @@ void main()
             if (!cylinderInstances_.empty())
             {
                 // 円柱の影
-                uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_);
                 glBindVertexArray(meshCylinder_[cylinder_quality].vao);
                 glDrawElementsInstanced(
                     GL_TRIANGLES,
