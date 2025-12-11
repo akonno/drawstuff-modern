@@ -752,23 +752,31 @@ namespace ds_internal
         {
             glm::mat4 model(1.0f);
 
-            // ODE R[12] → glm::mat4
             glm::mat4 rot(1.0f);
-            rot[0][0] = R[0];
-            rot[0][1] = R[1];
-            rot[0][2] = R[2];
-            rot[1][0] = R[4];
-            rot[1][1] = R[5];
-            rot[1][2] = R[6];
-            rot[2][0] = R[8];
-            rot[2][1] = R[9];
-            rot[2][2] = R[10];
 
+            // 旧 setTransform と同じ 3x3 になるように詰める
+            // 行0: [R0 R1 R2]
+            rot[0][0] = (float)R[0]; // col0, row0
+            rot[1][0] = (float)R[1]; // col1, row0
+            rot[2][0] = (float)R[2]; // col2, row0
+
+            // 行1: [R4 R5 R6]
+            rot[0][1] = (float)R[4]; // col0, row1
+            rot[1][1] = (float)R[5]; // col1, row1
+            rot[2][1] = (float)R[6]; // col2, row1
+
+            // 行2: [R8 R9 R10]
+            rot[0][2] = (float)R[8];  // col0, row2
+            rot[1][2] = (float)R[9];  // col1, row2
+            rot[2][2] = (float)R[10]; // col2, row2
+
+            // 平行移動 → 回転 → スケールの順（旧コードと整合）
             model = glm::translate(model,
-                                   glm::vec3((float)pos[0], (float)pos[1], (float)pos[2]));
+                                   glm::vec3((float)pos[0],
+                                             (float)pos[1],
+                                             (float)pos[2]));
             model *= rot;
 
-            // 単位ボックスが [-0.5, 0.5]^3 なので 0.5 を掛ける
             model = glm::scale(model,
                                glm::vec3((float)sides[0],
                                          (float)sides[1],
