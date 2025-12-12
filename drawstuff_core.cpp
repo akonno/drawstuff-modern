@@ -3455,6 +3455,22 @@ void main()
         // GL 初期化
         gladLoadGL();
 
+        // OpenGL バージョンチェック
+        GLint major = 0, minor = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+
+        // OpenGL 3.3 未満ならエラー終了
+        if (major < 3 || (major == 3 && minor < 3)) {
+            std::cerr << "OpenGL 3.3 or higher is required." << std::endl;
+            std::cerr << "Your system supports OpenGL "
+                      << major << "." << minor << std::endl;
+            // ベンダー提供ドライバーのインストールを推奨
+            std::cerr << "Please install the vendor-provided graphics drivers." << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        // シェーダープログラム初期化
         initBasicProgram();
         initBasicInstancedProgram();
 
