@@ -31,33 +31,24 @@
 #endif
 
 #include <array>
-#include <iostream>
-#include <string>
-#include <thread>
 #include <chrono>
-#include <vector>
-#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <cmath>
-#include <cstdio>
 #include <cstdarg>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+
 #include <ode/ode.h>
 // #include "config.h"
-
-#ifdef HAVE_APPLE_OPENGL_FRAMEWORK
-#include <OpenGL/gl.h>
-#include <OpenGL/glu.h>
-#else
-#include <GL/gl.h>
-#include <GL/glu.h>
-#endif
 
 #include "drawstuff_core.hpp"
 #include <X11/Xlib.h>  // Display, Window, XChangeProperty など
@@ -1825,65 +1816,208 @@ void main()
         {7, 2, 11},
     };
 
-    static void appendSpherePatch(
-        const glm::vec3 &p1,
-        const glm::vec3 &p2,
-        const glm::vec3 &p3,
-        int level,
-        std::vector<VertexPN> &vertices,
-        std::vector<uint32_t> &indices)
+    struct EdgeKey
     {
-        if (level > 0)
+        uint32_t a, b; // a < b
+        bool operator==(const EdgeKey &o) const { return a == o.a && b == o.b; }
+    };
+    struct EdgeKeyHash
+    {
+        size_t operator()(const EdgeKey &k) const noexcept
         {
-            glm::vec3 q1 = glm::normalize(0.5f * (p1 + p2));
-            glm::vec3 q2 = glm::normalize(0.5f * (p2 + p3));
-            glm::vec3 q3 = glm::normalize(0.5f * (p3 + p1));
+            uint64_t v = (uint64_t(k.a) << 32) | uint64_t(k.b);
+            return std::hash<uint64_t>{}(v);
+        }
+    };
 
-            appendSpherePatch(p1, q1, q3, level - 1, vertices, indices);
-            appendSpherePatch(q1, p2, q2, level - 1, vertices, indices);
-            appendSpherePatch(q1, q2, q3, level - 1, vertices, indices);
-            appendSpherePatch(q3, q2, p3, level - 1, vertices, indices);
-        }
-        else
+    // edgePoints[key] は「a->b の順に K+1 点」(0..K) の index を持つ。
+    // 0 は a, K は b, 中間が (K-1) 個。
+    using EdgePointTable = std::unordered_map<EdgeKey, std::vector<uint32_t>, EdgeKeyHash>;
+
+    static const std::vector<uint32_t> &getOrBuildEdgePoints(
+        uint32_t a, uint32_t b, int K,
+        std::vector<glm::vec3> &pos,
+        EdgePointTable &edgePoints)
+    {
+        EdgeKey key{std::min(a, b), std::max(a, b)};
+        auto it = edgePoints.find(key);
+        if (it != edgePoints.end())
+            return it->second;
+
+        // a< b の canonical 方向で作る
+        uint32_t lo = key.a, hi = key.b;
+        std::vector<uint32_t> idx;
+        idx.resize(static_cast<size_t>(K) + 1);
+
+        idx[0] = lo;
+        idx[static_cast<size_t>(K)] = hi;
+
+        // 中間点を生成
+        for (int t = 1; t < K; ++t)
         {
-            uint32_t base = static_cast<uint32_t>(vertices.size());
-            vertices.push_back({p1, glm::normalize(p1)});
-            vertices.push_back({p2, glm::normalize(p2)});
-            vertices.push_back({p3, glm::normalize(p3)});
-            indices.push_back(base);
-            indices.push_back(base + 1);
-            indices.push_back(base + 2);
+            float s = float(t) / float(K);
+            glm::vec3 p = glm::normalize((1.0f - s) * pos[lo] + s * pos[hi]);
+            idx[static_cast<size_t>(t)] = static_cast<uint32_t>(pos.size());
+            pos.push_back(p);
         }
+
+        auto [insIt, ok] = edgePoints.emplace(key, std::move(idx));
+        return insIt->second;
+    }
+
+    // face 内の格子点 (i,j) を取得する。
+    // i は B 方向、j は C 方向、残りは A 方向。
+    // i>=0, j>=0, i+j<=K
+    static uint32_t getFaceLatticeIndex(
+        uint32_t A, uint32_t B, uint32_t C,
+        int i, int j, int K,
+        std::vector<glm::vec3> &pos,
+        EdgePointTable &edgePoints,
+        std::vector<uint32_t> &faceInterior) // face 固有の内部点 index を積む
+    {
+        // 頂点
+        if (i == 0 && j == 0)
+            return A;
+        if (i == K && j == 0)
+            return B;
+        if (i == 0 && j == K)
+            return C;
+
+        // エッジ上
+        if (j == 0)
+        {
+            // A-B 上: i = 0..K
+            const auto &e = getOrBuildEdgePoints(A, B, K, pos, edgePoints);
+            // e は min->max 方向。A->B の向きに合わせて t を変換する
+            uint32_t lo = std::min(A, B);
+            bool forward = (A == lo); // A が lo なら forward
+            int t = forward ? i : (K - i);
+            return e[static_cast<size_t>(t)];
+        }
+        if (i == 0)
+        {
+            // A-C 上: j = 0..K
+            const auto &e = getOrBuildEdgePoints(A, C, K, pos, edgePoints);
+            uint32_t lo = std::min(A, C);
+            bool forward = (A == lo);
+            int t = forward ? j : (K - j);
+            return e[static_cast<size_t>(t)];
+        }
+        if (i + j == K)
+        {
+            // B-C 上: j = 0..K で C 側、i = 0..K で B 側
+            // ここでは i を使って B->C の t とみなす（i=0 -> B, i=K -> C）
+            const auto &e = getOrBuildEdgePoints(B, C, K, pos, edgePoints);
+            uint32_t lo = std::min(B, C);
+            bool forward = (B == lo);
+
+            int tFromB = K - i;
+            int t = forward ? tFromB : (K - tFromB);
+            return e[static_cast<size_t>(t)];
+        }
+
+        // 面内部点：ここで作る（この点はこの面にしか属さないので共有不要）
+        // バリセントリックで作って球面へ射影
+        float a = float(K - i - j) / float(K);
+        float b = float(i) / float(K);
+        float c = float(j) / float(K);
+        glm::vec3 p = glm::normalize(a * pos[A] + b * pos[B] + c * pos[C]);
+
+        uint32_t idx = static_cast<uint32_t>(pos.size());
+        pos.push_back(p);
+        faceInterior.push_back(idx);
+        return idx;
     }
 
     void DrawstuffApp::initSphereMeshForQuality(int quality, Mesh &dstMesh)
     {
-        std::vector<VertexPN> vertices;
-        std::vector<uint32_t> indices;
-
-        int level = quality - 1; // quality=1 → 分割なし, 2→1回, 3→2回 … など
-
-        for (int i = 0; i < 20; ++i)
+        const int K = quality + 1;
+        if (K < 1)
         {
-            // ★ drawPatch と同じ頂点順序を使うのが安全
-            const GLfloat *pA = gSphereIcosaVerts[gSphereIcosaFaces[i][2]];
-            const GLfloat *pB = gSphereIcosaVerts[gSphereIcosaFaces[i][1]];
-            const GLfloat *pC = gSphereIcosaVerts[gSphereIcosaFaces[i][0]];
-
-            glm::vec3 p1(pA[0], pA[1], pA[2]);
-            glm::vec3 p2(pB[0], pB[1], pB[2]);
-            glm::vec3 p3(pC[0], pC[1], pC[2]);
-
-            appendSpherePatch(p1, p2, p3, level, vertices, indices);
+            internalError("initSphereMeshForQuality: invalid level");
         }
-        
-        // ここから VAO / VBO / EBO を作成（box と同様）
 
-        // VAO
+        // --- 0) 初期 12 頂点（icosahedron） ---
+        std::vector<glm::vec3> pos;
+        pos.reserve(12 + 30 * (K > 1 ? (K - 1) : 0)); // ざっくり
+        for (int i = 0; i < 12; ++i)
+        {
+            glm::vec3 p(gSphereIcosaVerts[i][0], gSphereIcosaVerts[i][1], gSphereIcosaVerts[i][2]);
+            pos.push_back(glm::normalize(p));
+        }
+
+        // --- 1) エッジ分割点共有テーブル ---
+        EdgePointTable edgePoints;
+        edgePoints.reserve(64);
+
+        // --- 2) index を生成（面ごとに K^2 個の三角形）---
+        std::vector<uint32_t> indices;
+        indices.reserve(static_cast<size_t>(20) * static_cast<size_t>(K) * static_cast<size_t>(K) * 3);
+
+        // 面ごと内部点の生成indexを集める（デバッグ用に使える）
+        std::vector<uint32_t> faceInterior;
+        faceInterior.reserve(static_cast<size_t>(20) * (K > 2 ? (K - 1) * (K - 2) / 2 : 0));
+
+        for (int fi = 0; fi < 20; ++fi)
+        {
+            // あなたの元コードの順序（faces[i][2],[1],[0]）を踏襲
+            uint32_t A = (uint32_t)gSphereIcosaFaces[fi][2];
+            uint32_t B = (uint32_t)gSphereIcosaFaces[fi][1];
+            uint32_t C = (uint32_t)gSphereIcosaFaces[fi][0];
+
+            // face の格子 index を (i,j) で保持
+            // i: 0..K, j: 0..K-i
+            std::vector<std::vector<uint32_t>> grid(static_cast<size_t>(K) + 1);
+            for (int i = 0; i <= K; ++i)
+            {
+                grid[static_cast<size_t>(i)].resize(static_cast<size_t>(K - i) + 1);
+                for (int j = 0; j <= K - i; ++j)
+                {
+                    grid[static_cast<size_t>(i)][static_cast<size_t>(j)] =
+                        getFaceLatticeIndex(A, B, C, i, j, K, pos, edgePoints, faceInterior);
+                }
+            }
+
+            // 三角形化：各小セルを2枚（ただし端は1枚）
+            // 典型的な三角格子の張り方
+            for (int i = 0; i < K; ++i)
+            {
+                for (int j = 0; j < K - i; ++j)
+                {
+                    uint32_t v0 = grid[static_cast<size_t>(i)][static_cast<size_t>(j)];
+                    uint32_t v1 = grid[static_cast<size_t>(i + 1)][static_cast<size_t>(j)];
+                    uint32_t v2 = grid[static_cast<size_t>(i)][static_cast<size_t>(j + 1)];
+
+                    // tri 1
+                    indices.push_back(v0);
+                    indices.push_back(v1);
+                    indices.push_back(v2);
+
+                    // tri 2（右上が存在する時だけ）
+                    if (j < K - i - 1)
+                    {
+                        uint32_t v3 = grid[static_cast<size_t>(i + 1)][static_cast<size_t>(j + 1)];
+                        indices.push_back(v1);
+                        indices.push_back(v3);
+                        indices.push_back(v2);
+                    }
+                }
+            }
+        }
+
+        // --- 3) VertexPN 化（球なら normal=pos でスムース） ---
+        std::vector<VertexPN> vertices;
+        vertices.resize(pos.size());
+        for (size_t i = 0; i < pos.size(); ++i)
+        {
+            vertices[i].pos = pos[i];
+            vertices[i].normal = pos[i]; // unit sphere → smooth shading
+        }
+
+        // --- 4) VAO / VBO / EBO 作成（あなたのコードと同じ） ---
         glGenVertexArrays(1, &dstMesh.vao);
         glBindVertexArray(dstMesh.vao);
 
-        // VBO
         glGenBuffers(1, &dstMesh.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, dstMesh.vbo);
         glBufferData(GL_ARRAY_BUFFER,
@@ -1891,7 +2025,6 @@ void main()
                      vertices.data(),
                      GL_STATIC_DRAW);
 
-        // EBO
         glGenBuffers(1, &dstMesh.ebo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dstMesh.ebo);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER,
@@ -1899,31 +2032,16 @@ void main()
                      indices.data(),
                      GL_STATIC_DRAW);
 
-        // layout(location = 0) vec3 aPos;
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(
-            0,                                                // location
-            3,                                                // size
-            GL_FLOAT,                                         // type
-            GL_FALSE,                                         // normalized
-            sizeof(VertexPN),                                 // stride
-            reinterpret_cast<void *>(offsetof(VertexPN, pos)) // offset
-        );
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VertexPN),
+                              reinterpret_cast<void *>(offsetof(VertexPN, pos)));
 
-        // layout(location = 1) vec3 aNormal;
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(
-            1,                                                   // location
-            3,                                                   // size
-            GL_FLOAT,                                            // type
-            GL_FALSE,                                            // normalized
-            sizeof(VertexPN),                                    // stride
-            reinterpret_cast<void *>(offsetof(VertexPN, normal)) // offset
-        );
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(VertexPN),
+                              reinterpret_cast<void *>(offsetof(VertexPN, normal)));
 
         dstMesh.indexCount = static_cast<GLsizei>(indices.size());
 
-        // 後片付け
         glBindVertexArray(0);
     }
 
@@ -3767,10 +3885,10 @@ void main()
             // 球の影
             if (!sphereInstances_.empty())
             {
-                glBindVertexArray(meshSphere_[sphere_quality].vao);
+                glBindVertexArray(meshSphere_[shadow_sphere_quality].vao);
                 glDrawElementsInstanced(
                     GL_TRIANGLES,
-                    meshSphere_[sphere_quality].indexCount,
+                    meshSphere_[shadow_sphere_quality].indexCount,
                     GL_UNSIGNED_INT,
                     nullptr,
                     static_cast<GLsizei>(sphereInstances_.size()));
