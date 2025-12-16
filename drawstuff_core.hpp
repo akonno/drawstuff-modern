@@ -751,6 +751,7 @@ namespace ds_internal
         int sphere_quality = 3;
         const int shadow_sphere_quality = 1; // 影用は低品質で固定
         int cylinder_quality = 3;
+        const int shadow_cylinder_quality = 2; // 影用は低品質で固定
         int draw_mode = DS_POLYFILL;
         
         // 内部ヘルパー

@@ -2085,7 +2085,7 @@ void main()
         // 軸: Z
         // 円周: X-Y 平面
         //
-        for (int i = 0; i <= n; ++i)
+        for (int i = 0; i < n; ++i)
         {
             float theta = a * static_cast<float>(i);
             float nx = std::cos(theta); // 半径方向 X
@@ -2108,10 +2108,11 @@ void main()
         //   bottom: 2*i + 1
         for (int i = 0; i < n; ++i)
         {
+            const int j = (i + 1) % n; // 次のスライス（ラップアラウンド）
             uint32_t iTop0 = 2 * i;
             uint32_t iBot0 = 2 * i + 1;
-            uint32_t iTop1 = 2 * (i + 1);
-            uint32_t iBot1 = 2 * (i + 1) + 1;
+            uint32_t iTop1 = 2 * j;
+            uint32_t iBot1 = 2 * j + 1;
 
             // 三角形1: top0, bot0, top1
             indices.push_back(iTop0);
@@ -2132,7 +2133,7 @@ void main()
         });
 
         uint32_t topRingStart = static_cast<uint32_t>(vertices.size());
-        for (int i = 0; i <= n; ++i)
+        for (int i = 0; i < n; ++i)
         {
             float theta = a * static_cast<float>(i);
             float x = std::cos(theta);
@@ -2144,9 +2145,10 @@ void main()
 
         for (int i = 0; i < n; ++i)
         {
+            const int j = (i + 1) % n; // ラップアラウンド
             uint32_t i0 = topCenterIndex;
             uint32_t i1 = topRingStart + i;
-            uint32_t i2 = topRingStart + i + 1;
+            uint32_t i2 = topRingStart + j;
 
             indices.push_back(i0);
             indices.push_back(i1);
@@ -2161,7 +2163,7 @@ void main()
         });
 
         uint32_t bottomRingStart = static_cast<uint32_t>(vertices.size());
-        for (int i = 0; i <= n; ++i)
+        for (int i = 0; i < n; ++i)
         {
             float theta = a * static_cast<float>(i);
             float x = std::cos(theta);
@@ -2174,8 +2176,9 @@ void main()
         // 下側は外から見て CCW になるように頂点順を反転
         for (int i = 0; i < n; ++i)
         {
+            const int j = (i + 1) % n; // ラップアラウンド
             uint32_t i0 = bottomCenterIndex;
-            uint32_t i1 = bottomRingStart + i + 1;
+            uint32_t i1 = bottomRingStart + j;
             uint32_t i2 = bottomRingStart + i;
 
             indices.push_back(i0);
@@ -3907,10 +3910,10 @@ void main()
             if (!cylinderInstances_.empty())
             {
                 // 円柱の影
-                glBindVertexArray(meshCylinder_[cylinder_quality].vao);
+                glBindVertexArray(meshCylinder_[shadow_cylinder_quality].vao);
                 glDrawElementsInstanced(
                     GL_TRIANGLES,
-                    meshCylinder_[cylinder_quality].indexCount,
+                    meshCylinder_[shadow_cylinder_quality].indexCount,
                     GL_UNSIGNED_INT,
                     nullptr,
                     static_cast<GLsizei>(cylinderInstances_.size()));
