@@ -1,29 +1,15 @@
-// drawstuff_core.cpp
-// This code is rewritten from drawstuff (part of ODE) to provide
-// backward compatibility for programs that used drawstuff for rendering.
+// drawstuff_core.cpp - implementation file for core parts of drawstuff-modern
+//
+// This file is part of drawstuff-modern, a modern reimplementation inspired by
+// the drawstuff library distributed with the Open Dynamics Engine (ODE).
+//
+// The original drawstuff was developed by Russell L. Smith.
+// This implementation has been substantially rewritten and redesigned.
+//
+// Copyright (c) 2025 Akihisa Konno
+// Released under the BSD 3-Clause License.
+// See the LICENSE file for details.
 
-// Original drawstuff license:
-/*************************************************************************
- *                                                                       *
- * Open Dynamics Engine, Copyright (C) 2001-2003 Russell L. Smith.       *
- * All rights reserved.  Email: russ@q12.org   Web: www.q12.org          *
- *                                                                       *
- * This library is free software; you can redistribute it and/or         *
- * modify it under the terms of EITHER:                                  *
- *   (1) The GNU Lesser General Public License as published by the Free  *
- *       Software Foundation; either version 2.1 of the License, or (at  *
- *       your option) any later version. The text of the GNU Lesser      *
- *       General Public License is included with this library in the     *
- *       file LICENSE.TXT.                                               *
- *   (2) The BSD-style license that is included with this library in     *
- *       the file LICENSE-BSD.TXT.                                       *
- *                                                                       *
- * This library is distributed in the hope that it will be useful,       *
- * but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the files    *
- * LICENSE.TXT and LICENSE-BSD.TXT for more details.                     *
- *                                                                       *
- *************************************************************************/
 #include "drawstuff_core.hpp"
 
 #ifdef WIN32

@@ -1,78 +1,16 @@
-// drawstuffCompat.h - drawstuff-compatible graphics functions
-// This code is rewritten from drawstuff (part of ODE) to provide
-// backward compatibility for programs that used drawstuff for rendering.
-
-// Original drawstuff license:
-/*************************************************************************
- *                                                                       *
- * Open Dynamics Engine, Copyright (C) 2001-2003 Russell L. Smith.       *
- * All rights reserved.  Email: russ@q12.org   Web: www.q12.org          *
- *                                                                       *
- * This library is free software; you can redistribute it and/or         *
- * modify it under the terms of EITHER:                                  *
- *   (1) The GNU Lesser General Public License as published by the Free  *
- *       Software Foundation; either version 2.1 of the License, or (at  *
- *       your option) any later version. The text of the GNU Lesser      *
- *       General Public License is included with this library in the     *
- *       file LICENSE.TXT.                                               *
- *   (2) The BSD-style license that is included with this library in     *
- *       the file LICENSE-BSD.TXT.                                       *
- *                                                                       *
- * This library is distributed in the hope that it will be useful,       *
- * but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the files    *
- * LICENSE.TXT and LICENSE-BSD.TXT for more details.                     *
- *                                                                       *
- *************************************************************************/
-
-/** @defgroup drawstuff DrawStuff
- *
- * DrawStuff is a library for rendering simple 3D objects in a virtual
- * environment, for the purposes of demonstrating the features of ODE.
- * It is provided for demonstration purposes and is no way meant to compete
- * with industrial strength 3D rendering engines.
- *
- * A number of premade models are rendered, with images of the models
- * textured onto the 3D objects. If texture support is not available on
- * your system, plain colors are used instead. The texture option is offered
- * for debugging purposes, so you can watch the objects rotate as they move.
- *
- * Drawstuff is completely independent of ODE, except for a few places where
- * it was just convenient to have DMatrix3 defined.
- *
- * Using this library should be fairly simple:
- * (1) You will need the GLUT and SDL packages in order to compile it,
- *     but these are installed with most Linux distributions or can be
- *     downloaded from the web.
- * (2) On MS-Windows systems you will need the GLUT and SDL DLLs, as
- *     well as a compiler that supports OpenGL.
- * (3) To start drawing, call dsSimulationLoop().  This routine will run
- *     your simulation and repeatedly call your draw function to redraw the
- *     scenes.
- * (4) Your simulation and draw functions will call the dBodyGet*() and
- *     dGeomGet*() primitives to discover the positions of the objects.
- * (5) For each object, call one of the dsDrawXXX() functions to draw it.
- * (6) Keystrokes in the main window and especially in the 3D drawing
- *     window cause character codes to be sent back to the command loop.
- *
- * Usage instructions:
- * - A command key function can be supplied by modifying the dsFunctions
- *   structure and passing it to dsSimulationLoop().
- * - Use the mouse to move the camera; various button combinations are
- *   recognized.
- *   - Left button: rotate camera
- *   - Middle button: move camera in XY
- *   - Right button: move camera in Z
- * - The camera can be moved with the numeric keypad:
- *   - 8: move forward
- *   - 2: move backward
- *   - 4: move left
- *   - 6: move right
- *   - 9: move up
- *   - 3: move down
- *
- * @{
- */
+// drawstuffCompat.hpp - drawstuff-compatible graphics functions
+//
+// This file is derived from the drawstuff public API definitions
+// distributed with the Open Dynamics Engine (ODE).
+//
+// Original drawstuff API and interface design:
+//   Copyright (c) 2001–2007 Russell L. Smith.
+//
+// Modifications and extensions for drawstuff-modern:
+//   Copyright (c) 2025 Akihisa Konno.
+//
+// This file is released under the BSD 3-Clause License.
+// See the LICENSE file for details.
 
 #ifndef __DRAWSTUFF_H__
 #define __DRAWSTUFF_H__
@@ -354,21 +292,21 @@ extern "C"
      * @ingroup drawstuff
      * @param n quality level
      */
-    DS_API void dsSetSphereQuality(int n);
+    DS_API void dsSetSphereQuality(const int n);
 
     /**
      * @brief Set capsule tesselation quality.
      * @ingroup drawstuff
      * @param n quality level
      */
-    DS_API void dsSetCapsuleQuality(int n);
+    DS_API void dsSetCapsuleQuality(const int n);
 
     /**
      * @brief Set drawing mode (filled or wireframe).
      * @ingroup drawstuff
      * @param mode DS_POLYFILL or DS_WIREFRAME
      */
-    DS_API void dsSetDrawMode(int mode);
+    DS_API void dsSetDrawMode(const int mode);
 
     /* Frame capture control (appended by KONNO Akihisa) */
     DS_API void dsStartCaptureFrames(void);

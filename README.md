@@ -62,15 +62,23 @@ This project is a modern reimplementation inspired by the drawstuff library
 distributed with the Open Dynamics Engine (ODE), originally developed by
 Russell L. Smith.
 
+Open Dynamics Engine (ODE): https://www.ode.org/
+
 While the internal implementation has been completely redesigned using
 modern OpenGL techniques, the API compatibility is intentionally preserved
 to allow existing drawstuff-based simulation code to be reused with minimal changes.
+
+## Design Notes
+
+For implementation details and design decisions, including the rationale
+for using OpenGL 3.3 core and instanced rendering, see
+[docs/design-notes.md](docs/design-notes.md).
 
 ## License
 
 drawstuff-modern is released under the BSD 3-Clause License.
 
-See the LICENSE file for details.
+See the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgements
 

@@ -1,32 +1,16 @@
-// drawstuffCompat.h - drawstuff-compatible graphics functions
-// This code is rewritten from drawstuff (part of ODE) to provide
-// backward compatibility for programs that used drawstuff for rendering.
-
-// Original drawstuff license:
-/*************************************************************************
- *                                                                       *
- * Open Dynamics Engine, Copyright (C) 2001-2003 Russell L. Smith.       *
- * All rights reserved.  Email: russ@q12.org   Web: www.q12.org          *
- *                                                                       *
- * This library is free software; you can redistribute it and/or         *
- * modify it under the terms of EITHER:                                  *
- *   (1) The GNU Lesser General Public License as published by the Free  *
- *       Software Foundation; either version 2.1 of the License, or (at  *
- *       your option) any later version. The text of the GNU Lesser      *
- *       General Public License is included with this library in the     *
- *       file LICENSE.TXT.                                               *
- *   (2) The BSD-style license that is included with this library in     *
- *       the file LICENSE-BSD.TXT.                                       *
- *                                                                       *
- * This library is distributed in the hope that it will be useful,       *
- * but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the files    *
- * LICENSE.TXT and LICENSE-BSD.TXT for more details.                     *
- *                                                                       *
- *************************************************************************/
+// drawstuffCompat.cpp - drawstuff-compatible graphics functions
+//
+// This file is part of drawstuff-modern, a modern reimplementation inspired by
+// the drawstuff library distributed with the Open Dynamics Engine (ODE).
+//
+// The original drawstuff was developed by Russell L. Smith.
+// This implementation has been substantially rewritten and redesigned.
+//
+// Copyright (c) 2025 Akihisa Konno
+// Released under the BSD 3-Clause License.
+// See the LICENSE file for details.
 
 /*
-
 simple graphics.
 
 the following command line flags can be used (typically under unix)
@@ -34,28 +18,7 @@ the following command line flags can be used (typically under unix)
   -noshadow[s]        Do not draw any shadows
   -pause              Start the simulation paused
   -texturepath <path> Inform an alternative textures path
-
-TODO
-----
-
-manage openGL state changes better
-
 */
-
-//***************************************************************************
-// motion model
-
-// call this to update the current camera position. the bits in 'mode' say
-// if the left (1), middle (2) or right (4) mouse button is pressed, and
-// (deltax,deltay) is the amount by which the mouse pointer has moved.
-
-//***************************************************************************
-// drawing loop stuff
-
-// the current state:
-//    0 = uninitialized
-//    1 = dsSimulationLoop() called
-//    2 = dsDrawFrame() called
 
 #include <cstdlib>
 #include <cstdarg>

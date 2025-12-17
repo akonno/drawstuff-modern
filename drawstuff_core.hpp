@@ -1,4 +1,15 @@
-// drawstuff_core.hpp – 内部専用ヘッダ
+// drawstuff_core.hpp – header file for core parts of drawstuff-modern
+//
+// This file is part of drawstuff-modern, a modern reimplementation inspired by
+// the drawstuff library distributed with the Open Dynamics Engine (ODE).
+//
+// The original drawstuff was developed by Russell L. Smith.
+// This implementation has been substantially rewritten and redesigned.
+//
+// Copyright (c) 2025 Akihisa Konno
+// Released under the BSD 3-Clause License.
+// See the LICENSE file for details.
+
 #pragma once
 
 #include <array>
@@ -772,7 +783,6 @@ namespace ds_internal
         void drawSky(const float view_xyz[3]);
         void drawGround();
         void drawPyramidGrid();
-        void drawUnitSphere();
 
         void motion(const int mode, const int deltax, const int deltay);
         void wrapCameraAngles();
