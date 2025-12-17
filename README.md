@@ -25,9 +25,14 @@ This library is intended for:
 - Visualization of large-scale simulations (e.g., thousands to hundreds of thousands of objects)
 - Educational use in computational mechanics and physics
 - Users who want simple, controllable visualization without relying on full game engines
+
 ## Current Limitations
 
 The following limitations are known in the current implementation:
+
+- **Platform support** is currently limited to Linux systems or Windows environments
+  using WSL with an X11-based display server.
+  Native Windows and macOS platforms are not supported at this time.
 
 - **Convex shapes** are supported in the core-based rendering pipeline; however,
   they are currently rendered using a legacy per-triangle drawing approach and
