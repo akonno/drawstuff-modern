@@ -33,9 +33,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include <ode/ode.h>
-// #include "config.h"
-
 #include "drawstuff_core.hpp"
 #include <X11/Xlib.h>  // Display, Window, XChangeProperty など
 #include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
