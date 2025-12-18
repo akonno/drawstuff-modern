@@ -17,7 +17,8 @@ jobs:
             cmake g++ make \
             libx11-dev \
             mesa-common-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libglm-dev
 
       - name: Configure
         run: |
