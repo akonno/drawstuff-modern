@@ -17,8 +17,7 @@
 #include <memory>
 #include <vector>
 #include <cmath>
-#include <X11/Xlib.h>  // XEvent など
-#include <X11/Xatom.h> // XA_STRING, XA_WM_NAME など
+#include <X11/Xlib.h>  // XEvent
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp> // lookAt, perspective, rotate, translate
@@ -771,6 +770,8 @@ namespace ds_internal
         void platformSimulationLoop(const int window_width, const int window_height, const dsFunctions *fn,
                                     const int initial_pause);
         void createMainWindow(const int width, const int height);
+        void destroyMainWindow();
+        void microsleep(const unsigned long usec);
         void captureFrame(const int num);
         void initMotionModel();
         void applyViewpointToGL();

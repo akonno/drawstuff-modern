@@ -31,6 +31,10 @@ target_include_directories(glad_obj
 # ---- drawstuff-modern library ----
 add_library(drawstuff-modern ${_LIB_TYPE}
   src/drawstuff_core.cpp
+  src/mesh_utils.cpp
+  src/primitive_meshes.cpp
+  src/platform_x11_glx.cpp
+  src/shader_programs.cpp
   src/drawstuffCompat.cpp
   $<TARGET_OBJECTS:glad_obj>
 )
