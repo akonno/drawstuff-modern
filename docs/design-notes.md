@@ -102,7 +102,7 @@ Several guiding principles influenced the overall design:
 
 ## Notes on Current Limitations
 
-Some shape types are not yet fully optimized (e.g., convex and capsule shapes),
+Some shapes are not yet fully optimized (e.g., convex shapes),
 and platform support is currently limited to Linux and WSL environments
 with an X11-based window system.
 

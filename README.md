@@ -38,10 +38,6 @@ The following limitations are known in the current implementation:
   they are currently rendered using a legacy per-triangle drawing approach and
   are not yet optimized with batched or instanced rendering.
 
-- **Capsule shapes** are not yet instanced.
-  Each capsule is rendered individually, which may impact performance when
-  visualizing large numbers of capsules.
-
 These limitations are primarily related to performance optimization and do not
 affect correctness or API compatibility.
 
