@@ -343,10 +343,16 @@ namespace ds_internal
     std::vector<InstanceBasic> sphereInstances_;
     std::vector<InstanceBasic> boxInstances_;
     std::vector<InstanceBasic> cylinderInstances_;
+    std::vector<InstanceBasic> capsuleCapTopInstances_;
+    std::vector<InstanceBasic> capsuleCapBottomInstances_;
+    std::vector<InstanceBasic> capsuleCylinderInstances_;
 
     GLuint g_sphereInstanceVBO = 0;
     GLuint g_boxInstanceVBO = 0;
     GLuint g_cylinderInstanceVBO = 0;
+    GLuint g_capsuleCapTopInstanceVBO = 0;
+    GLuint g_capsuleCapBottomInstanceVBO = 0;
+    GLuint g_capsuleCylinderInstanceVBO = 0;
 
     // ================ DrawstuffApp implementation =================
     DrawstuffApp &DrawstuffApp::instance()
@@ -1038,6 +1044,58 @@ namespace ds_internal
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
+    void DrawstuffApp::setupCapsuleInstanceAttributes()
+    {
+        if (g_capsuleCapTopInstanceVBO == 0)    glGenBuffers(1, &g_capsuleCapTopInstanceVBO);
+        if (g_capsuleCapBottomInstanceVBO == 0) glGenBuffers(1, &g_capsuleCapBottomInstanceVBO);
+        if (g_capsuleCylinderInstanceVBO == 0)  glGenBuffers(1, &g_capsuleCylinderInstanceVBO);
+
+        const GLsizei stride = static_cast<GLsizei>(sizeof(InstanceBasic));
+
+        auto setupForMesh = [&](Mesh& mesh, GLuint instanceVbo)
+        {
+            glBindVertexArray(mesh.vao);
+            glBindBuffer(GL_ARRAY_BUFFER, instanceVbo);
+
+            // もし InstanceBasic の先頭が model でない可能性があるなら offsetof を使う
+            std::size_t offset = 0; // = offsetof(InstanceBasic, model); とできるならそれがより安全
+
+            for (int i = 0; i < 4; ++i)
+            {
+                const GLuint loc = 2 + i;
+                glEnableVertexAttribArray(loc);
+                glVertexAttribPointer(
+                    loc, 4, GL_FLOAT, GL_FALSE, stride,
+                    reinterpret_cast<const void*>(offset));
+                glVertexAttribDivisor(loc, 1);
+                offset += sizeof(glm::vec4);
+            }
+
+            glEnableVertexAttribArray(6);
+            glVertexAttribPointer(
+                6, 4, GL_FLOAT, GL_FALSE, stride,
+                reinterpret_cast<const void*>(offsetof(InstanceBasic, color)));
+            glVertexAttribDivisor(6, 1);
+
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+        };
+
+        for (int capsule_quality_ = 1; capsule_quality_ <= 3; ++capsule_quality_)
+        {
+            Mesh& meshTop      = meshCapsuleCapTop_[capsule_quality_];
+            Mesh& meshBottom   = meshCapsuleCapBottom_[capsule_quality_];
+            Mesh& meshCylinder = meshCapsuleCylinder_[capsule_quality_];
+
+            if (meshTop.vao == 0 || meshBottom.vao == 0 || meshCylinder.vao == 0)
+                continue;
+
+            setupForMesh(meshTop,      g_capsuleCapTopInstanceVBO);
+            setupForMesh(meshBottom,   g_capsuleCapBottomInstanceVBO);
+            setupForMesh(meshCylinder, g_capsuleCylinderInstanceVBO); // ←ここが重要
+        }
+    }
+
     // ==============================================================
     // main simulation loop and related functions
     // ==============================================================
@@ -1151,6 +1209,13 @@ namespace ds_internal
         boxInstances_.reserve(initialInstanceBufferSize);
         cylinderInstances_.clear();
         cylinderInstances_.reserve(initialInstanceBufferSize);
+        capsuleCapTopInstances_.clear();
+        capsuleCapTopInstances_.reserve(initialInstanceBufferSize);
+        capsuleCapBottomInstances_.clear();
+        capsuleCapBottomInstances_.reserve(initialInstanceBufferSize);
+        capsuleCylinderInstances_.clear();
+        capsuleCylinderInstances_.reserve(initialInstanceBufferSize);
+
 
         if (g_sphereInstanceVBO == 0)
         {
@@ -1164,9 +1229,22 @@ namespace ds_internal
         {
             glGenBuffers(1, &g_cylinderInstanceVBO);
         }
+        if (g_capsuleCapTopInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_capsuleCapTopInstanceVBO);
+        }
+        if (g_capsuleCapBottomInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_capsuleCapBottomInstanceVBO);
+        }
+        if (g_capsuleCylinderInstanceVBO == 0)
+        {
+            glGenBuffers(1, &g_capsuleCylinderInstanceVBO);
+        }
         setupSphereInstanceAttributes();
         setupBoxInstanceAttributes();
         setupCylinderInstanceAttributes();
+        setupCapsuleInstanceAttributes();
     }
 
     void DrawstuffApp::stopGraphics()
@@ -1301,6 +1379,18 @@ namespace ds_internal
             // インスタンスバッファを GPU にアップロード
             uploadInstanceBuffer(g_cylinderInstanceVBO, cylinderInstances_); // VBO or SSBO
         }
+        if (!capsuleCapTopInstances_.empty())
+        {
+            uploadInstanceBuffer(g_capsuleCapTopInstanceVBO, capsuleCapTopInstances_);
+        }
+        if (!capsuleCapBottomInstances_.empty())
+        {
+            uploadInstanceBuffer(g_capsuleCapBottomInstanceVBO, capsuleCapBottomInstances_);
+        }
+        if (!capsuleCylinderInstances_.empty())
+        {
+            uploadInstanceBuffer(g_capsuleCylinderInstanceVBO, capsuleCylinderInstances_);
+        }
 
         glUseProgram(programBasicInstanced_);
 
@@ -1353,6 +1443,39 @@ namespace ds_internal
                 GL_UNSIGNED_INT,
                 nullptr,
                 static_cast<GLsizei>(cylinderInstances_.size()));
+        }
+        if (!capsuleCapTopInstances_.empty())
+        {
+            // カプセル上部半球をまとめて描画
+            glBindVertexArray(meshCapsuleCapTop_[capsule_quality].vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshCapsuleCapTop_[capsule_quality].indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(capsuleCapTopInstances_.size()));
+        }
+        if (!capsuleCapBottomInstances_.empty())
+        {
+            // カプセル下部半球をまとめて描画
+            glBindVertexArray(meshCapsuleCapBottom_[capsule_quality].vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshCapsuleCapBottom_[capsule_quality].indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(capsuleCapBottomInstances_.size()));
+        }
+        if (!capsuleCylinderInstances_.empty())
+        {
+            // カプセル円柱部をまとめて描画
+            glBindVertexArray(meshCapsuleCylinder_[capsule_quality].vao);
+            glDrawElementsInstanced(
+                GL_TRIANGLES,
+                meshCapsuleCylinder_[capsule_quality].indexCount,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(capsuleCylinderInstances_.size()));
         }
 
         if (use_shadows)
@@ -1424,6 +1547,39 @@ namespace ds_internal
                     nullptr,
                     static_cast<GLsizei>(cylinderInstances_.size()));
             }
+            if (!capsuleCapTopInstances_.empty())
+            {
+                // カプセル上部半球の影
+                glBindVertexArray(meshCapsuleCapTop_[shadow_cylinder_quality].vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshCapsuleCapTop_[shadow_cylinder_quality].indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(capsuleCapTopInstances_.size()));
+            }
+            if (!capsuleCapBottomInstances_.empty())
+            {
+                // カプセル下部半球の影
+                glBindVertexArray(meshCapsuleCapBottom_[shadow_cylinder_quality].vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshCapsuleCapBottom_[shadow_cylinder_quality].indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(capsuleCapBottomInstances_.size()));
+            }
+            if (!capsuleCylinderInstances_.empty())
+            {
+                // カプセル円柱部の影
+                glBindVertexArray(meshCapsuleCylinder_[shadow_cylinder_quality].vao);
+                glDrawElementsInstanced(
+                    GL_TRIANGLES,
+                    meshCapsuleCylinder_[shadow_cylinder_quality].indexCount,
+                    GL_UNSIGNED_INT,
+                    nullptr,
+                    static_cast<GLsizei>(capsuleCylinderInstances_.size()));
+            }
         }
         glDisable(GL_POLYGON_OFFSET_FILL);
         glBindVertexArray(0);
@@ -1433,6 +1589,9 @@ namespace ds_internal
         sphereInstances_.clear();
         boxInstances_.clear();
         cylinderInstances_.clear();
+        capsuleCapTopInstances_.clear();
+        capsuleCapBottomInstances_.clear();
+        capsuleCylinderInstances_.clear();
 
         current_state = SIM_STATE_RUNNING;
     }

@@ -660,7 +660,8 @@ namespace ds_internal {
         glBindVertexArray(0);
     }
 
-    static void initUnitCapsuleParts(
+    static void initUnitCapsulePartsForQuality(
+        int quality,
         Mesh &bodyMesh,
         Mesh &capTopMesh,
         Mesh &capBottomMesh)
@@ -670,7 +671,7 @@ namespace ds_internal {
         using std::sin;
 
         // ========= パラメータ =========
-        constexpr int capsule_quality = 3;  // 1〜3
+        const int capsule_quality = quality;  // 1〜3
         const int n = capsule_quality * 12; // 円周分割数（4の倍数）
         const float length = 2.0f;          // 平行部長さ
         const float radius = 1.0f;          // 半径
@@ -1016,9 +1017,15 @@ namespace ds_internal {
         initCylinderMeshForQuality(3, meshCylinder_[3]);
 
         // --- ここから capsule 用メッシュ生成 ---
-        initUnitCapsuleParts(meshCapsuleBody_,
-                             meshCapsuleCapTop_,
-                             meshCapsuleCapBottom_);
+        initUnitCapsulePartsForQuality(1, meshCapsuleCylinder_[1],
+                                        meshCapsuleCapTop_[1],
+                                        meshCapsuleCapBottom_[1]);
+        initUnitCapsulePartsForQuality(2, meshCapsuleCylinder_[2],
+                                        meshCapsuleCapTop_[2],
+                                        meshCapsuleCapBottom_[2]);
+        initUnitCapsulePartsForQuality(3, meshCapsuleCylinder_[3],
+                                        meshCapsuleCapTop_[3],
+                                        meshCapsuleCapBottom_[3]);
 
         initTriangleMesh();
         initTrianglesBatchMesh();

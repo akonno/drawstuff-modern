@@ -340,9 +340,8 @@ void dsSetSphereQuality(const int n)
 
 void dsSetCapsuleQuality(const int n)
 {
-    // ignored
-    std::cerr << "dsSetCapsuleQuality: ignored (fixed quality)" << std::endl;
-    throw std::runtime_error("dsSetCapsuleQuality: ignored (fixed quality)");
+    auto &app = ds_internal::DrawstuffApp::instance();
+    app.setCapsuleQuality(n);
 }
 
 void dsSetDrawMode(const int mode)

@@ -127,7 +127,7 @@ static void start()
     dsSetShadows(true);   // shadows on to stress shadow instancing path
 
     dsSetSphereQuality(object_quality); // keep tessellation low-ish for speed (0/1/2... depends on your impl)
-    // dsSetCapsuleQuality(object_quality);
+    dsSetCapsuleQuality(object_quality);
 }
 
 static void simLoop(int /*pause*/)
@@ -228,7 +228,7 @@ static void command(int cmd)
             object_quality++;
         std::cerr << "Increasing quality to " << object_quality << std::endl;
         dsSetSphereQuality(object_quality);
-        // dsSetCapsuleQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
     }
     else if (cmd == '-')
     {
@@ -236,7 +236,7 @@ static void command(int cmd)
             object_quality--;
         std::cerr << "Decreasing quality to " << object_quality << std::endl;
         dsSetSphereQuality(object_quality);
-        // dsSetCapsuleQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
     }
     // Direct quality selection via number keys
     else if (cmd == '1')
@@ -244,21 +244,21 @@ static void command(int cmd)
         object_quality = 1;
         std::cerr << "Setting sphere quality to " << object_quality << std::endl;
         dsSetSphereQuality(object_quality);
-        // dsSetCapsuleQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
     }
     else if (cmd == '2')
     {
         object_quality = 2;
         std::cerr << "Setting sphere quality to " << object_quality << std::endl;
         dsSetSphereQuality(object_quality);
-        // dsSetCapsuleQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
     }
     else if (cmd == '3')
     {
         object_quality = 3;
         std::cerr << "Setting sphere quality to " << object_quality << std::endl;
         dsSetSphereQuality(object_quality);
-        // dsSetCapsuleQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
     }
     else if (cmd == 'r' || cmd == 'R')
     {

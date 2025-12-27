@@ -134,6 +134,9 @@ namespace ds_internal
     extern std::vector<InstanceBasic> boxInstances_;
     extern std::vector<InstanceBasic> cylinderInstances_;
     // カプセルは sphereTop / sphereBottom / cylinderSide にそれぞれ分ける
+    extern std::vector<InstanceBasic> capsuleCapTopInstances_;
+    extern std::vector<InstanceBasic> capsuleCapBottomInstances_;
+    extern std::vector<InstanceBasic> capsuleCylinderInstances_;
 
     // constants to convert degrees to radians and the reverse
     constexpr float RAD_TO_DEG = 180.0 / M_PI;
@@ -191,6 +194,8 @@ namespace ds_internal
         // 球などの表示品質設定
         void setSphereQuality(const int n) { sphere_quality = n; }
         void setCylinderQuality(const int n) { cylinder_quality = n; }
+        void setCapsuleQuality(const int n) { capsule_quality = n; }
+        // 描画モード設定
         void setDrawMode(const int mode) { draw_mode = mode; }
         void setWriteFrames(bool wf) { writeframes = wf; }
         void toggleWriteFrames() { writeframes = !writeframes; }
@@ -305,6 +310,10 @@ namespace ds_internal
         void drawCapsule(const T pos[3], const T R[12],
                          const T length, const T radius)
         {
+            static_assert(
+                std::is_same<T, float>::value || std::is_same<T, double>::value,
+                "T must be float or double");
+
             if (current_state != SIM_STATE_DRAWING)
             {
                 std::string s = "drawCapsule: drawing function called outside simulation loop";
@@ -328,7 +337,10 @@ namespace ds_internal
                                           glm::vec3(r, r, halfCyl));
             glm::mat4 M_body = W * S_body;
 
-            drawMeshBasic(meshCapsuleBody_, M_body, current_color);
+            InstanceBasic instBody;
+            instBody.model = M_body;
+            instBody.color = current_color;
+            capsuleCylinderInstances_.push_back(instBody);
 
             // ---- 上キャップ ----
             // unit: center (0,0,1), radius 1
@@ -340,7 +352,10 @@ namespace ds_internal
                                                 glm::vec3(0.0f, 0.0f, tz_top));
             glm::mat4 M_capTop = W * T_capTop * S_cap;
 
-            drawMeshBasic(meshCapsuleCapTop_, M_capTop, current_color);
+            InstanceBasic instCap;
+            instCap.model = M_capTop;
+            instCap.color = current_color;
+            capsuleCapTopInstances_.push_back(instCap);
 
             // ---- 下キャップ ----
             // unit: center (0,0,-1) → scale後 center (0,0,-r)
@@ -350,14 +365,10 @@ namespace ds_internal
                                                    glm::vec3(0.0f, 0.0f, tz_bottom));
             glm::mat4 M_capBottom = W * T_capBottom * S_cap;
 
-            drawMeshBasic(meshCapsuleCapBottom_, M_capBottom, current_color);
-
-            if (use_shadows)
-            {
-                drawShadowMesh(meshCapsuleBody_, M_body);
-                drawShadowMesh(meshCapsuleCapTop_, M_capTop);
-                drawShadowMesh(meshCapsuleCapBottom_, M_capBottom);
-            }
+            InstanceBasic instCapBottom;
+            instCapBottom.model = M_capBottom;
+            instCapBottom.color = current_color;
+            capsuleCapBottomInstances_.push_back(instCapBottom);
         }
 
         template <typename T>
@@ -626,7 +637,7 @@ namespace ds_internal
         Mesh meshBox_;
         Mesh meshSphere_[4];
         Mesh meshCylinder_[4];
-        Mesh meshCapsuleBody_, meshCapsuleCapTop_, meshCapsuleCapBottom_; // カプセル用メッシュ
+        Mesh meshCapsuleCylinder_[4], meshCapsuleCapTop_[4], meshCapsuleCapBottom_[4]; // カプセル用メッシュ
         Mesh meshTriangle_;
         Mesh meshTrianglesBatch_;
         Mesh meshLine_;
@@ -669,6 +680,7 @@ namespace ds_internal
         void setupSphereInstanceAttributes();
         void setupBoxInstanceAttributes();
         void setupCylinderInstanceAttributes();
+        void setupCapsuleInstanceAttributes();
 
         // ground 用 VAO/VBO
         GLuint vaoGround_ = 0;
@@ -762,6 +774,8 @@ namespace ds_internal
         const int shadow_sphere_quality = 1; // 影用は低品質で固定
         int cylinder_quality = 3;
         const int shadow_cylinder_quality = 2; // 影用は低品質で固定
+        int capsule_quality = 3;  // カプセルは球＋円筒の組み合わせなので両方に依存
+        const int shadow_capsule_quality = 1; // 影用は低品質で固定
         int draw_mode = DS_POLYFILL;
         
         // 内部ヘルパー

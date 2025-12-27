@@ -8,6 +8,8 @@
 
 #include <drawstuff/drawstuff.h>
 
+int object_quality = 3; // default quality
+
 static void start()
 {
     // Optional: camera viewpoint
@@ -73,6 +75,44 @@ static void command(int cmd)
     {
         std::printf("Toggle pause\n");
     }
+    else if (cmd == '+')
+    {
+        if (object_quality < 3)
+            object_quality++;
+        std::cerr << "Increasing quality to " << object_quality << std::endl;
+        dsSetSphereQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
+    }
+    else if (cmd == '-')
+    {
+        if (object_quality > 0)
+            object_quality--;
+        std::cerr << "Decreasing quality to " << object_quality << std::endl;
+        dsSetSphereQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
+    }
+    // Direct quality selection via number keys
+    else if (cmd == '1')
+    {
+        object_quality = 1;
+        std::cerr << "Setting sphere quality to " << object_quality << std::endl;
+        dsSetSphereQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
+    }
+    else if (cmd == '2')
+    {
+        object_quality = 2;
+        std::cerr << "Setting sphere quality to " << object_quality << std::endl;
+        dsSetSphereQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
+    }
+    else if (cmd == '3')
+    {
+        object_quality = 3;
+        std::cerr << "Setting sphere quality to " << object_quality << std::endl;
+        dsSetSphereQuality(object_quality);
+        dsSetCapsuleQuality(object_quality);
+    }
 }
 
 int main(int argc, char **argv)
@@ -86,6 +126,8 @@ int main(int argc, char **argv)
     fn.path_to_textures = "../textures"; // adjust if needed
 
     // Window size: tweak as you like
+    dsSetSphereQuality(object_quality);
+    dsSetCapsuleQuality(object_quality);
     dsSimulationLoop(argc, argv, 1024, 768, &fn);
     return 0;
 }
