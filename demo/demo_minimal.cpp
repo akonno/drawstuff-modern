@@ -8,10 +8,16 @@
 
 #include <drawstuff/drawstuff.h>
 
+#define DS_HUD_FPS_IMPLEMENTATION
+#include "hud_fps.hpp"
+static fps_hud::FpsHud g_fps_hud;
+
 int object_quality = 3; // default quality
 
 static void start()
 {
+    g_fps_hud.init();
+
     // Optional: camera viewpoint
     float xyz[3] = {2.0f, -3.0f, 1.5f};
     float hpr[3] = {90.0f, -10.0f, 0.0f}; // heading, pitch, roll (deg)
@@ -66,6 +72,12 @@ static void simLoop(int /*pause*/)
 
     // Optional: show a ground texture
     // dsSetTexture(DS_WOOD);
+
+    
+    // HUD FPS表示
+    g_fps_hud.tick();
+
+    g_fps_hud.render(800, 600); // 仮のフレームバッファサイズ
 }
 
 static void command(int cmd)

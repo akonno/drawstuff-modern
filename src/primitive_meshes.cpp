@@ -773,10 +773,14 @@ namespace ds_internal {
         float start_nx = 0.0f;
         float start_ny = 1.0f;
 
-        for (int j = 0; j < (n / 4); ++j)
+        const int cap_rings = capsule_quality * 2;  // 例: q=3 → 6
+        const float a_cap = (0.5f * static_cast<float>(PI)) / static_cast<float>(cap_rings);
+        const float sa_cap = std::sin(a_cap);
+        const float ca_cap = std::cos(a_cap);
+        for (int j = 0; j < cap_rings; ++j)
         {
-            float start_nx2 = ca * start_nx + sa * start_ny;
-            float start_ny2 = -sa * start_nx + ca * start_ny;
+            float start_nx2 = ca_cap * start_nx + sa_cap * start_ny;
+            float start_ny2 = -sa_cap * start_nx + ca_cap * start_ny;
 
             float nx = start_nx;
             float nyc = start_ny;
@@ -838,10 +842,10 @@ namespace ds_internal {
         start_nx = 0.0f;
         start_ny = 1.0f;
 
-        for (int j = 0; j < (n / 4); ++j)
+        for (int j = 0; j < cap_rings; ++j)
         {
-            float start_nx2 = ca * start_nx - sa * start_ny;
-            float start_ny2 = sa * start_nx + ca * start_ny;
+            float start_nx2 = ca_cap * start_nx - sa_cap * start_ny;
+            float start_ny2 = sa_cap * start_nx + ca_cap * start_ny;
 
             float nx = start_nx;
             float nyc = start_ny;

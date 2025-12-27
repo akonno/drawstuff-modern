@@ -6,11 +6,18 @@
 
 #include <drawstuff/drawstuff.h>
 
-#include <cstdint>
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <iomanip>
+#include <random>
 #include <vector>
 #include <cmath>
-#include <algorithm>
-#include <random>
+#include <cstdint>
+
+#define DS_HUD_FPS_IMPLEMENTATION
+#include "hud_fps.hpp"
+static fps_hud::FpsHud g_fps_hud;
 
 struct Object
 {
@@ -118,6 +125,8 @@ int object_quality = 3; // default quality for spheres and cylinders
 
 static void start()
 {
+    g_fps_hud.init();
+
     // Camera: back and above
     float xyz[3] = {0.0f, -18.0f, 8.0f};
     float hpr[3] = {90.0f, -18.0f, 0.0f};
@@ -171,6 +180,11 @@ static void simLoop(int /*pause*/)
             dsDrawBox(s.pos, R, sides);
         }
     }
+
+    // HUD FPS表示
+    g_fps_hud.tick();
+
+    g_fps_hud.render(800, 600); // 仮のフレームバッファサイズ
 }
 
 static void command(int cmd)
