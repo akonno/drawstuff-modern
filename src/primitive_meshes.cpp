@@ -604,7 +604,7 @@ namespace ds_internal {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
-        static void initMeshFromVectors(
+    static void initMeshFromVectors(
         Mesh &dst,
         const std::vector<VertexPN> &vertices,
         const std::vector<uint32_t> &indices)
@@ -660,28 +660,371 @@ namespace ds_internal {
         glBindVertexArray(0);
     }
 
+    // =================================================
+    // Capsule メッシュ初期化補助関数群
+    // ---- ユーティリティ：量子化キーで頂点溶接（重複排除） ----
+    struct VKey
+    {
+        int px, py, pz;
+        int nx, ny, nz;
+        bool operator==(const VKey &o) const
+        {
+            return px == o.px && py == o.py && pz == o.pz && nx == o.nx && ny == o.ny && nz == o.nz;
+        }
+    };
+
+    struct VKeyHash
+    {
+        std::size_t operator()(const VKey &k) const noexcept
+        {
+            auto h = [](int v) -> std::size_t
+            {
+                // 32-bit mix
+                std::uint32_t x = (std::uint32_t)v;
+                x ^= x >> 16;
+                x *= 0x7feb352dU;
+                x ^= x >> 15;
+                x *= 0x846ca68bU;
+                x ^= x >> 16;
+                return (std::size_t)x;
+            };
+            std::size_t r = 0;
+            r ^= h(k.px) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            r ^= h(k.py) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            r ^= h(k.pz) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            r ^= h(k.nx) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            r ^= h(k.ny) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            r ^= h(k.nz) + 0x9e3779b97f4a7c15ULL + (r << 6) + (r >> 2);
+            return r;
+        }
+    };
+
+    static inline int qf(float x, float scale)
+    {
+        return (int)std::lrint(x * scale);
+    }
+
+    static uint32_t addVertexWelded(std::vector<VertexPN> &outVerts,
+                                    std::unordered_map<VKey, uint32_t, VKeyHash> &map,
+                                    const glm::vec3 &pos,
+                                    const glm::vec3 &nrm,
+                                    float posQuant = 1e6f,
+                                    float nrmQuant = 1e6f)
+    {
+        VKey key{
+            qf(pos.x, posQuant), qf(pos.y, posQuant), qf(pos.z, posQuant),
+            qf(nrm.x, nrmQuant), qf(nrm.y, nrmQuant), qf(nrm.z, nrmQuant)};
+        auto it = map.find(key);
+        if (it != map.end())
+            return it->second;
+
+        VertexPN v;
+        v.pos = pos;
+        v.normal = glm::normalize(nrm);
+        uint32_t idx = (uint32_t)outVerts.size();
+        outVerts.push_back(v);
+        map.emplace(key, idx);
+        return idx;
+    }
+
+    // ---- cubed-sphere 面定義 ----
+    enum class CubeFace
+    {
+        PX,
+        NX,
+        PY,
+        NY,
+        PZ,
+        NZ
+    };
+
+    // u,v in [-1, 1]
+    static glm::vec3 cubeToDir(CubeFace f, float u, float v)
+    {
+        switch (f)
+        {
+        case CubeFace::PX:
+            return glm::vec3(1.f, v, -u);
+        case CubeFace::NX:
+            return glm::vec3(-1.f, v, u);
+        case CubeFace::PY:
+            return glm::vec3(u, 1.f, -v);
+        case CubeFace::NY:
+            return glm::vec3(u, -1.f, v);
+        case CubeFace::PZ:
+            return glm::vec3(u, v, 1.f);
+        case CubeFace::NZ:
+            return glm::vec3(-u, v, -1.f);
+        }
+        return glm::vec3(0);
+    }
+
+    // ---- クリッピング：半球平面 localZ >= 0 (top) / <= 0 (bottom) ----
+    // 入力は “球面上の点” (center + r*dir) を想定。
+    // 境界点は z=0 の赤道にスナップして (x,y) を正規化する。
+    static inline float signedPlaneZ(const glm::vec3 &pLocal, bool top)
+    {
+        // top: inside if z >= 0
+        // bottom: inside if z <= 0  => inside if -z >= 0
+        return top ? pLocal.z : -pLocal.z;
+    }
+
+    static glm::vec3 snapToEquator(const glm::vec3 &pLocal, float r)
+    {
+        glm::vec3 d = pLocal;
+        d.z = 0.0f;
+        float len = std::sqrt(d.x * d.x + d.y * d.y);
+        if (len < 1e-20f)
+        {
+            // 退化：理論上は起きにくい（赤道はz=0でx^2+y^2=1）
+            return glm::vec3(r, 0, 0);
+        }
+        d.x /= len;
+        d.y /= len;
+        return glm::vec3(d.x * r, d.y * r, 0.0f);
+    }
+
+    // tri clip against plane signedPlaneZ>=0 (in local coords)
+    // returns polygon (0..4 vertices) in local coords on sphere, already snapped on boundary.
+    static void clipTriToHemisphere(const glm::vec3 &aL,
+                                    const glm::vec3 &bL,
+                                    const glm::vec3 &cL,
+                                    bool top,
+                                    float r,
+                                    std::vector<glm::vec3> &outPoly)
+    {
+        outPoly.clear();
+        glm::vec3 p[3] = {aL, bL, cL};
+        float s[3] = {signedPlaneZ(p[0], top),
+                      signedPlaneZ(p[1], top),
+                      signedPlaneZ(p[2], top)};
+
+        auto inside = [&](int i)
+        { return s[i] >= 0.0f; };
+
+        // Sutherland–Hodgman (triangle -> polygon)
+        std::vector<glm::vec3> poly = {p[0], p[1], p[2]};
+        std::vector<float> val = {s[0], s[1], s[2]};
+
+        auto clipOnce = [&](std::vector<glm::vec3> &inP, std::vector<float> &inV,
+                            std::vector<glm::vec3> &outP, std::vector<float> &outV)
+        {
+            outP.clear();
+            outV.clear();
+            const int m = (int)inP.size();
+            for (int i = 0; i < m; ++i)
+            {
+                int j = (i + 1) % m;
+                const glm::vec3 &P = inP[i];
+                const glm::vec3 &Q = inP[j];
+                float VP = inV[i];
+                float VQ = inV[j];
+                bool in1 = (VP >= 0.0f);
+                bool in2 = (VQ >= 0.0f);
+
+                auto emit = [&](const glm::vec3 &X, float VX)
+                {
+                    outP.push_back(X);
+                    outV.push_back(VX);
+                };
+
+                if (in1 && in2)
+                {
+                    emit(Q, VQ);
+                }
+                else if (in1 && !in2)
+                {
+                    // leaving: add intersection
+                    float t = VP / (VP - VQ); // VP + t*(VQ-VP) = 0
+                    glm::vec3 I = P + t * (Q - P);
+                    I = snapToEquator(I, r);
+                    emit(I, 0.0f);
+                }
+                else if (!in1 && in2)
+                {
+                    // entering: add intersection + Q
+                    float t = VP / (VP - VQ);
+                    glm::vec3 I = P + t * (Q - P);
+                    I = snapToEquator(I, r);
+                    emit(I, 0.0f);
+                    emit(Q, VQ);
+                }
+                else
+                {
+                    // outside -> outside : emit nothing
+                }
+            }
+        };
+
+        std::vector<glm::vec3> tmpP;
+        std::vector<float> tmpV;
+        clipOnce(poly, val, tmpP, tmpV);
+
+        // 結果
+        outPoly = tmpP;
+    }
+
+    // polygon(3 or 4) -> triangles fan
+    static void triangulatePolyFan(const std::vector<glm::vec3> &poly,
+                                   std::vector<std::array<glm::vec3, 3>> &outTris)
+    {
+        outTris.clear();
+        if (poly.size() < 3)
+            return;
+        for (size_t i = 1; i + 1 < poly.size(); ++i)
+        {
+            outTris.push_back({poly[0], poly[i], poly[i + 1]});
+        }
+    }
+
+    // ---- cubed-sphere 半球キャップ生成 ----
+    // div: 1面の分割数（例: quality*2〜quality*4 あたりが無難）
+    static void buildHemisphereCapCubedSphere(bool top,
+                                              int div,
+                                              float radius,
+                                              float halfBodyLength, // l
+                                              std::vector<VertexPN> &outVerts,
+                                              std::vector<uint32_t> &outIndices)
+    {
+        outVerts.clear();
+        outIndices.clear();
+
+        const float r = radius;
+        const float l = halfBodyLength;
+        const glm::vec3 center = top ? glm::vec3(0, 0, +l) : glm::vec3(0, 0, -l);
+
+        // 6面全部作って半球でクリップ（実装を単純化）
+        const CubeFace faces[6] = {
+            CubeFace::PX, CubeFace::NX, CubeFace::PY, CubeFace::NY, CubeFace::PZ, CubeFace::NZ};
+
+        std::unordered_map<VKey, uint32_t, VKeyHash> welded;
+
+        auto emitTriLocal = [&](const glm::vec3 &aL, const glm::vec3 &bL, const glm::vec3 &cL)
+        {
+            // aL,bL,cL は center を引いた “local”（球中心基準）
+            // → pos は center + aL, normal は aL/r
+            glm::vec3 na = glm::normalize(aL);
+            glm::vec3 nb = glm::normalize(bL);
+            glm::vec3 nc = glm::normalize(cL);
+
+            uint32_t ia = addVertexWelded(outVerts, welded, center + aL, na);
+            uint32_t ib = addVertexWelded(outVerts, welded, center + bL, nb);
+            uint32_t ic = addVertexWelded(outVerts, welded, center + cL, nc);
+
+            outIndices.push_back(ia);
+            outIndices.push_back(ib);
+            outIndices.push_back(ic);
+        };
+
+        // 面ごとに格子生成 -> 2三角形/セル -> 半球クリップ -> 出力
+        for (CubeFace f : faces)
+        {
+            for (int y = 0; y < div; ++y)
+            {
+                float v0 = -1.0f + 2.0f * (float)y / (float)div;
+                float v1 = -1.0f + 2.0f * (float)(y + 1) / (float)div;
+
+                for (int x = 0; x < div; ++x)
+                {
+                    float u0 = -1.0f + 2.0f * (float)x / (float)div;
+                    float u1 = -1.0f + 2.0f * (float)(x + 1) / (float)div;
+
+                    // 4 corners on cube
+                    glm::vec3 c00 = cubeToDir(f, u0, v0);
+                    glm::vec3 c10 = cubeToDir(f, u1, v0);
+                    glm::vec3 c01 = cubeToDir(f, u0, v1);
+                    glm::vec3 c11 = cubeToDir(f, u1, v1);
+
+                    // project to sphere directions
+                    glm::vec3 d00 = glm::normalize(c00);
+                    glm::vec3 d10 = glm::normalize(c10);
+                    glm::vec3 d01 = glm::normalize(c01);
+                    glm::vec3 d11 = glm::normalize(c11);
+
+                    // local positions on sphere
+                    glm::vec3 p00 = d00 * r;
+                    glm::vec3 p10 = d10 * r;
+                    glm::vec3 p01 = d01 * r;
+                    glm::vec3 p11 = d11 * r;
+
+                    // two tris: (00,10,11), (00,11,01)
+                    glm::vec3 A[2][3] = {
+                        {p00, p10, p11},
+                        {p00, p11, p01}};
+
+                    for (int t = 0; t < 2; ++t)
+                    {
+                        std::vector<glm::vec3> poly;
+                        clipTriToHemisphere(A[t][0], A[t][1], A[t][2], top, r, poly);
+
+                        std::vector<std::array<glm::vec3, 3>> tris;
+                        triangulatePolyFan(poly, tris);
+
+                        for (auto &tri : tris)
+                        {
+                            // tri は local coords。赤道は snap 済み。
+                            emitTriLocal(tri[0], tri[1], tri[2]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // cubed-sphere の赤道リングを XY 平面投影で構築
+    // div: 1面の分割数
+    static std::vector<glm::vec2> buildCubedSphereEquatorRingXY(int div)
+    {
+        std::vector<glm::vec2> ring;
+        ring.reserve(4 * div);
+
+        auto push = [&](float x, float y)
+        {
+            glm::vec3 p = glm::normalize(glm::vec3(x, y, 0.0f));
+            ring.emplace_back(p.x, p.y);
+        };
+
+        // +X face: (1, u) , u: -1 -> +1
+        for (int i = 0; i < div; ++i) {
+            float u = -1.0f + 2.0f * (float(i) / float(div));
+            push( 1.0f,  u);
+        }
+
+        // +Y face: (u, 1) , u: +1 -> -1  ← ここを逆向きに
+        for (int i = 0; i < div; ++i) {
+            float u =  1.0f - 2.0f * (float(i) / float(div));
+            push( u,  1.0f);
+        }
+
+        // -X face: (-1, u) , u: +1 -> -1
+        for (int i = 0; i < div; ++i) {
+            float u =  1.0f - 2.0f * (float(i) / float(div));
+            push(-1.0f,  u);
+        }
+
+        // -Y face: (u, -1) , u: -1 -> +1
+        for (int i = 0; i < div; ++i) {
+            float u = -1.0f + 2.0f * (float(i) / float(div));
+            push( u, -1.0f);
+        }
+
+        return ring; // 閉じていない（最後=最初ではない）
+    }
+
+    // ---- メイン関数：Capsule メッシュ生成 ----
     static void initUnitCapsulePartsForQuality(
         int quality,
         Mesh &bodyMesh,
         Mesh &capTopMesh,
         Mesh &capBottomMesh)
     {
-        constexpr float PI = glm::pi<float>();
-        using std::cos;
-        using std::sin;
-
         // ========= パラメータ =========
         const int capsule_quality = quality;  // 1〜3
-        const int n = capsule_quality * 12; // 円周分割数（4の倍数）
         const float length = 2.0f;          // 平行部長さ
         const float radius = 1.0f;          // 半径
 
         const float l = length * 0.5f; // cylinder は z = ±l (=±1)
         const float r = radius;
-
-        const float a = 2.0f * static_cast<float>(PI) / static_cast<float>(n);
-        const float sa = std::sin(a);
-        const float ca = std::cos(a);
 
         // 円筒用
         std::vector<VertexPN> cylVerts;
@@ -701,47 +1044,32 @@ namespace ds_internal {
         std::vector<VertexPN> capTopVerts;
         std::vector<uint32_t> capTopIndices;
 
-        auto addCapTopVertex = [&](float x, float y, float z,
-                                   float nx, float ny, float nz) -> uint32_t
-        {
-            VertexPN v;
-            v.pos = glm::vec3(x, y, z);
-            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
-            capTopVerts.push_back(v);
-            return static_cast<uint32_t>(capTopVerts.size() - 1);
-        };
-
         // 下キャップ用
         std::vector<VertexPN> capBottomVerts;
         std::vector<uint32_t> capBottomIndices;
 
-        auto addCapBottomVertex = [&](float x, float y, float z,
-                                      float nx, float ny, float nz) -> uint32_t
-        {
-            VertexPN v;
-            v.pos = glm::vec3(x, y, z);
-            v.normal = glm::normalize(glm::vec3(nx, ny, nz));
-            capBottomVerts.push_back(v);
-            return static_cast<uint32_t>(capBottomVerts.size() - 1);
-        };
+        // メッシュの品質（分割数）調整
+        // divは偶数である必要あり。奇数だとキャップと円筒との間に隙間ができる。
+        const int div = capsule_quality * 2 + 2;
 
         // =================================================
         // 1. 円筒本体 (unit cylinder)
         // =================================================
-        float ny = 1.0f;
-        float nz = 0.0f;
-        float tmp;
+        const auto ring = buildCubedSphereEquatorRingXY(div);
+        const int m = (int)ring.size();
+
         bool firstPair = true;
         uint32_t prevTop = 0, prevBottom = 0;
 
-        for (int i = 0; i <= n; ++i)
+        for (int i = 0; i <= m; ++i)
         {
-            float nx0 = ny;
-            float ny0 = nz;
-            float nz0 = 0.0f;
+            const glm::vec2 xy = ring[i % m]; // i==m で閉じる
+            const float x = xy.x;
+            const float y = xy.y;
 
-            uint32_t vTop = addCylVertex(ny * r, nz * r, +l, nx0, ny0, nz0);
-            uint32_t vBottom = addCylVertex(ny * r, nz * r, -l, nx0, ny0, nz0);
+            // 位置：円筒、法線：半径方向（z=0）
+            uint32_t vTop = addCylVertex(x * r, y * r, +l, x, y, 0.0f);
+            uint32_t vBottom = addCylVertex(x * r, y * r, -l, x, y, 0.0f);
 
             if (!firstPair)
             {
@@ -760,145 +1088,31 @@ namespace ds_internal {
 
             prevTop = vTop;
             prevBottom = vBottom;
-
-            // rotate ny,nz
-            tmp = ca * ny - sa * nz;
-            nz = sa * ny + ca * nz;
-            ny = tmp;
         }
 
         // =================================================
-        // 2. 上部キャップ (z >= +1)
+        // 2. 上部キャップ (cubed-sphere hemisphere)
         // =================================================
-        float start_nx = 0.0f;
-        float start_ny = 1.0f;
-
-        const int cap_rings = capsule_quality * 2;  // 例: q=3 → 6
-        const float a_cap = (0.5f * static_cast<float>(PI)) / static_cast<float>(cap_rings);
-        const float sa_cap = std::sin(a_cap);
-        const float ca_cap = std::cos(a_cap);
-        for (int j = 0; j < cap_rings; ++j)
-        {
-            float start_nx2 = ca_cap * start_nx + sa_cap * start_ny;
-            float start_ny2 = -sa_cap * start_nx + ca_cap * start_ny;
-
-            float nx = start_nx;
-            float nyc = start_ny;
-            float nzc = 0.0f;
-
-            float nx2 = start_nx2;
-            float ny2c = start_ny2;
-            float nz2c = 0.0f;
-
-            firstPair = true;
-            uint32_t prev0 = 0, prev1 = 0;
-
-            for (int i = 0; i <= n; ++i)
-            {
-                // 元コードの頂点・法線
-                uint32_t v0 = addCapTopVertex(
-                    ny2c * r, nz2c * r, l + nx2 * r,
-                    ny2c, nz2c, nx2);
-
-                uint32_t v1 = addCapTopVertex(
-                    nyc * r, nzc * r, l + nx * r,
-                    nyc, nzc, nx);
-
-                if (!firstPair)
-                {
-                    capTopIndices.push_back(prev0);
-                    capTopIndices.push_back(prev1);
-                    capTopIndices.push_back(v0);
-
-                    capTopIndices.push_back(prev1);
-                    capTopIndices.push_back(v1);
-                    capTopIndices.push_back(v0);
-                }
-                else
-                {
-                    firstPair = false;
-                }
-
-                prev0 = v0;
-                prev1 = v1;
-
-                // rotate n, n2
-                tmp = ca * nyc - sa * nzc;
-                nzc = sa * nyc + ca * nzc;
-                nyc = tmp;
-
-                tmp = ca * ny2c - sa * nz2c;
-                nz2c = sa * ny2c + ca * nz2c;
-                ny2c = tmp;
-            }
-
-            start_nx = start_nx2;
-            start_ny = start_ny2;
-        }
+        buildHemisphereCapCubedSphere(
+            /*top=*/true,
+            div,
+            /*radius=*/r,
+            /*halfBodyLength=*/l,
+            capTopVerts,
+            capTopIndices
+        );
 
         // =================================================
-        // 3. 下部キャップ (z <= -1)
+        // 3. 下部キャップ (cubed-sphere hemisphere)
         // =================================================
-        start_nx = 0.0f;
-        start_ny = 1.0f;
-
-        for (int j = 0; j < cap_rings; ++j)
-        {
-            float start_nx2 = ca_cap * start_nx - sa_cap * start_ny;
-            float start_ny2 = sa_cap * start_nx + ca_cap * start_ny;
-
-            float nx = start_nx;
-            float nyc = start_ny;
-            float nzc = 0.0f;
-
-            float nx2 = start_nx2;
-            float ny2c = start_ny2;
-            float nz2c = 0.0f;
-
-            firstPair = true;
-            uint32_t prev0 = 0, prev1 = 0;
-
-            for (int i = 0; i <= n; ++i)
-            {
-                uint32_t v0 = addCapBottomVertex(
-                    nyc * r, nzc * r, -l + nx * r,
-                    nyc, nzc, nx);
-
-                uint32_t v1 = addCapBottomVertex(
-                    ny2c * r, nz2c * r, -l + nx2 * r,
-                    ny2c, nz2c, nx2);
-
-                if (!firstPair)
-                {
-                    capBottomIndices.push_back(prev0);
-                    capBottomIndices.push_back(prev1);
-                    capBottomIndices.push_back(v0);
-
-                    capBottomIndices.push_back(prev1);
-                    capBottomIndices.push_back(v1);
-                    capBottomIndices.push_back(v0);
-                }
-                else
-                {
-                    firstPair = false;
-                }
-
-                prev0 = v0;
-                prev1 = v1;
-
-                // rotate n, n2
-                tmp = ca * nyc - sa * nzc;
-                nzc = sa * nyc + ca * nzc;
-                nyc = tmp;
-
-                tmp = ca * ny2c - sa * nz2c;
-                nz2c = sa * ny2c + ca * nz2c;
-                ny2c = tmp;
-            }
-
-            start_nx = start_nx2;
-            start_ny = start_ny2;
-        }
+        buildHemisphereCapCubedSphere(
+            /*top=*/false,
+            div,
+            /*radius=*/r,
+            /*halfBodyLength=*/l,
+            capBottomVerts,
+            capBottomIndices
+        );
 
         // =================================================
         // 4. Mesh へ転送
