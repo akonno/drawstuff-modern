@@ -34,12 +34,34 @@ The following limitations are known in the current implementation:
   using WSL with an X11-based display server.
   Native Windows and macOS platforms are not supported at this time.
 
-- **Convex shapes** are supported in the core-based rendering pipeline; however,
-  they are currently rendered using a legacy per-triangle drawing approach and
-  are not yet optimized with batched or instanced rendering.
+- **Convex shapes**  are supported in the core-based rendering pipeline.
+A convex polyhedron is tessellated on the CPU into a temporary list of triangles
+(e.g., via triangle fans per face) and rendered in a single batched draw call.
+Unlike **TriMesh**, convex shapes are not yet cached or registered as persistent GPU meshes.
+
 
 These limitations are primarily related to performance optimization and do not
 affect correctness or API compatibility.
+
+### Fast rendering of TriMesh objects (drawstuff-modern extension)
+
+The original drawstuff library did not provide a mechanism to pre-register
+triangle meshes for reuse. TriMesh objects were rendered by issuing draw calls
+per triangle, which became a significant bottleneck for large meshes.
+
+drawstuff-modern introduces an additional API for efficient rendering of
+triangle meshes. TriMesh geometry can be registered once as an indexed mesh
+and stored in persistent GPU buffers (VAO/VBO/EBO). Subsequent draw calls
+reference the registered mesh by handle, avoiding repeated CPU-side
+tessellation and per-triangle draw calls.
+
+This functionality is provided by the following non-original drawstuff APIs:
+
+- `dsRegisterIndexedMesh(...)`
+- `dsDrawRegisteredMesh(...)`
+
+These functions are extensions specific to drawstuff-modern and are not part
+of the original drawstuff API.
 
 ## Non-Goals
 
@@ -90,6 +112,7 @@ make
 ```
 ./demo/demo_minimal
 ./demo/demo_spheres_100k
+./demo/demo_show_obj some_OBJ_file
 ```
 
 ## License
