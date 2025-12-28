@@ -263,11 +263,17 @@ namespace ds_internal
     constexpr int DS_NUMTEXTURES = 4; // number of standard textures
     std::array<std::unique_ptr<Texture>, DS_NUMTEXTURES + 1> texture;
 
-    void buildTrianglesMeshFromVertexPN(
+    // ============================================================================
+    // TriMesh 用高速描画 API 実装
+    // ============================================================================
+    // GPU 側に MeshPN データを転送して Mesh を構築
+    void buildTrianglesMeshFromMeshPN(
         Mesh &outMesh,
-        const std::vector<VertexPN> &verts,
-        const std::vector<uint32_t> &indices)
+        MeshPN &meshPN)
     {
+        const std::vector<VertexPN> &verts = meshPN.vertices;
+        const std::vector<uint32_t> &indices = meshPN.indices;
+
         // 既存リソースの破棄
         if (outMesh.vao)
         {
@@ -321,17 +327,19 @@ namespace ds_internal
         glBindVertexArray(0);
     }
 
-    void buildTrianglesMeshFromVerticesAndIndices(
-        Mesh &outMesh,
+    // CPU 側：頂点配列データから MeshPN を構築
+    MeshPN buildTrianglesMeshPNFromVerticesAndIndices(
         const std::vector<float> &vertices,   // x,y,z,...
         const std::vector<uint32_t> &indices) // 0-based index
     {
+        MeshPN outMeshPN;
         // スムーズシェーディング版の VertexPN＋indices を構築
         // MeshPN meshPN = buildSmoothVertexPNFromVerticesAndIndices(vertices, indices);
         // 折り目付きシェーディング版の VertexPN＋indices を構築
-        MeshPN meshPN = buildCreasedVertexPNFromVerticesAndIndices(vertices, indices, 60.0f);
+        outMeshPN = buildCreasedVertexPNFromVerticesAndIndices(vertices, indices, 60.0f);
+
         // OpenGL の VAO/VBO/EBO を構築
-        buildTrianglesMeshFromVertexPN(outMesh, meshPN.vertices, meshPN.indices);
+        return outMeshPN;
     }
 
     // ============================================================================
@@ -1625,23 +1633,41 @@ namespace ds_internal
     // ==============================================================
     // TriMesh高速描画API
     // メッシュ登録
+    struct MeshResource
+    {
+        MeshPN meshPN;
+        Mesh meshGL;
+        bool dirty = true; // GPU 側の再構築が必要かどうか
+    };
+    // TriMesh 用高速描画 API 実装
+    std::vector<MeshResource> meshRegistry_;
+
     MeshHandle DrawstuffApp::registerIndexedMesh(
         const std::vector<float> &vertices,
         const std::vector<unsigned int> &indices)
     {
-        auto mesh = std::make_unique<Mesh>();
-        buildTrianglesMeshFromVerticesAndIndices(
-            *mesh, vertices, indices);
-        meshRegistry_.push_back(std::move(mesh));
+        MeshResource meshRes;
+        meshRes.meshPN = buildTrianglesMeshPNFromVerticesAndIndices(
+            vertices, indices);
+        meshRes.dirty = true;
+        meshRegistry_.push_back(std::move(meshRes));
+        MeshHandle h = static_cast<unsigned int>(meshRegistry_.size() - 1);
 
-        return static_cast<MeshHandle>(meshRegistry_.size() - 1);
+        return h;
     }
 
     void DrawstuffApp::drawRegisteredMesh(
         MeshHandle h,
         const float pos[3], const float R[12], const bool solid)
     {
-        Mesh *m = meshRegistry_[h].get();
+        MeshResource &meshRes = meshRegistry_[h];
+
+        if (meshRes.dirty)
+        {
+            // メッシュ VBO/VAO を初期化・更新
+            buildTrianglesMeshFromMeshPN(meshRes.meshGL, meshRes.meshPN);
+            meshRes.dirty = false;
+        }
 
         glm::mat4 model = buildModelMatrix(pos, R);
 
@@ -1650,7 +1676,7 @@ namespace ds_internal
         {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         }
-        drawMeshBasic(*m, model, current_color);
+        drawMeshBasic(meshRes.meshGL, model, current_color);
         if (!solid)
         {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -1658,7 +1684,7 @@ namespace ds_internal
 
         if (use_shadows)
         {
-            drawShadowMesh(*m, model);
+            drawShadowMesh(meshRes.meshGL, model);
         }
     }
 

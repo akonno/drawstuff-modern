@@ -12,9 +12,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(demo_minimal demo_minimal.cpp)
 add_executable(demo_100k_objects demo_100k_objects.cpp)
+add_executable(demo_show_obj demo_show_obj.cpp)
 
 target_link_libraries(demo_minimal PRIVATE drawstuff-modern)
 target_link_libraries(demo_100k_objects PRIVATE drawstuff-modern)
+target_link_libraries(demo_show_obj PRIVATE drawstuff-modern)
 
 # 通常はこれで <drawstuff/drawstuff.h> が見える（drawstuff-modern が PUBLIC で include/ を公開しているため）
 # もし見えない場合だけ、次の1行を有効化：

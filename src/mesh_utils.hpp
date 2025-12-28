@@ -12,8 +12,8 @@
 namespace ds_internal {
     // 三角形メッシュ高速描画用ユーティリティ（CPU側の生成結果）
     struct MeshPN {
-    std::vector<VertexPN> vertices;   // pos + normal
-    std::vector<uint32_t> indices;    // 0-based index (3つで1三角形)
+        std::vector<VertexPN> vertices;   // pos + normal
+        std::vector<uint32_t> indices;    // 0-based index (3つで1三角形)
     };
 
     struct EdgeKey

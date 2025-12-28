@@ -95,9 +95,6 @@ namespace
 
 } // anonymous namespace
 
-// TriMesh 用高速描画 API 用
-using MeshHandle = unsigned int;
-
 namespace ds_internal
 {
     enum SimulationState
@@ -122,6 +119,9 @@ namespace ds_internal
         GLsizei indexCount = 0;
         GLenum primitive = GL_TRIANGLES;
     };
+
+    // TriMesh 用高速描画 API 用
+    using MeshHandle = std::size_t;
 
     struct InstanceBasic
     {
@@ -926,8 +926,5 @@ namespace ds_internal
             // 念のため：2 頂点
             meshLine_.indexCount = 2;
         }
-
-        // TriMesh 用高速描画 API 実装
-        std::vector<std::unique_ptr<Mesh>> meshRegistry_;
     };
 } // namespace ds_internal

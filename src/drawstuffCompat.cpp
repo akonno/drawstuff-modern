@@ -419,12 +419,8 @@ extern "C" dsMeshHandle dsRegisterIndexedMesh(
     std::vector<float> v(vertices);
     std::vector<unsigned int> idx(indices);
 
-    h.id = with_app_or_default(
-        [v, idx](ds_internal::DrawstuffApp &app)
-        {
-            return app.registerIndexedMesh(v, idx);
-        }, 0 // エラーのときの無効値
-    );
+    auto &app = ds_internal::DrawstuffApp::instance();
+    h.id = app.registerIndexedMesh(v, idx);
     return h;
 }
 
