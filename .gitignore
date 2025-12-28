@@ -5,7 +5,7 @@
 *.slo
 *.lo
 *.o
-*.obj
+# *.obj # sample_torus.obj is included in this repository.
 
 # Precompiled Headers
 *.gch

@@ -111,8 +111,8 @@ make
 ### Run demos
 ```
 ./demo/demo_minimal
-./demo/demo_spheres_100k
-./demo/demo_show_obj some_OBJ_file
+./demo/demo_100k_objects
+./demo/demo_show_obj ../demo/sample_torus.obj
 ```
 
 ## License
