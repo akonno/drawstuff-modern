@@ -13,9 +13,13 @@
 static fps_hud::FpsHud g_fps_hud;
 
 int object_quality = 3; // default quality
+static const char* kHelpText =
+    "Keys:\n"
+    "  +/- or 1/2/3 : sphere and capsule quality\n";
 
 static void start()
 {
+    std::cout << kHelpText << std::endl;
     g_fps_hud.init();
 
     // Optional: camera viewpoint
@@ -72,34 +76,26 @@ static void simLoop(int /*pause*/)
 
     // Optional: show a ground texture
     // dsSetTexture(DS_WOOD);
-
-    
-    // HUD FPS表示
-    g_fps_hud.tick();
-
-    g_fps_hud.render(800, 600); // 仮のフレームバッファサイズ
 }
 
 static void command(int cmd)
 {
     // Minimal keyboard handling (optional)
-    if (cmd == DS_CMD_TOGGLE_PAUSE)
+    if (cmd == '+')
     {
-        std::printf("Toggle pause\n");
-    }
-    else if (cmd == '+')
-    {
-        if (object_quality < 3)
+        if (object_quality < 3) {
             object_quality++;
-        std::cerr << "Increasing quality to " << object_quality << std::endl;
+            std::cerr << "Increasing quality to " << object_quality << std::endl;
+        }
         dsSetSphereQuality(object_quality);
         dsSetCapsuleQuality(object_quality);
     }
     else if (cmd == '-')
     {
-        if (object_quality > 0)
+        if (object_quality > 1) {
             object_quality--;
-        std::cerr << "Decreasing quality to " << object_quality << std::endl;
+            std::cerr << "Decreasing quality to " << object_quality << std::endl;
+        }
         dsSetSphereQuality(object_quality);
         dsSetCapsuleQuality(object_quality);
     }
@@ -127,6 +123,13 @@ static void command(int cmd)
     }
 }
 
+static void postStep(int pause)
+{
+    // HUD FPS display
+    g_fps_hud.tick();
+    g_fps_hud.render(1024, 768); // adjust if needed
+}
+
 int main(int argc, char **argv)
 {
     dsFunctions fn;
@@ -136,6 +139,7 @@ int main(int argc, char **argv)
     fn.command = &command;
     fn.stop = nullptr;
     fn.path_to_textures = "../textures"; // adjust if needed
+    fn.postStep = &postStep;
 
     // Window size: tweak as you like
     dsSetSphereQuality(object_quality);

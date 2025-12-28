@@ -43,6 +43,30 @@ Unlike **TriMesh**, convex shapes are not yet cached or registered as persistent
 These limitations are primarily related to performance optimization and do not
 affect correctness or API compatibility.
 
+### Rendering order and overlays (drawstuff-modern note)
+
+drawstuff-modern uses deferred and batched rendering internally to achieve
+high performance, especially for instanced primitives and registered meshes.
+
+As a result, draw calls issued from the user `step()` callback are not always
+rendered immediately to the framebuffer. Scene geometry may be flushed later
+in the frame, after `step()` returns.
+
+For this reason, drawing HUDs, text, or other 2D overlays directly from
+`step()` may lead to them being partially or fully overwritten by subsequent
+3D rendering.
+
+To address this, drawstuff-modern provides an optional `postStep()` callback.
+If defined, `postStep()` is called after all internal 3D rendering has been
+completed and just before the frame is presented.
+
+User-defined HUDs and overlay rendering should be performed in `postStep()`
+rather than in `step()`.
+
+Several demo programs under `demo/demo_*.cpp` include simple HUD examples,
+such as FPS counters, implemented using `postStep()`, which can be used as
+reference code.
+
 ### Fast rendering of TriMesh objects (drawstuff-modern extension)
 
 The original drawstuff library did not provide a mechanism to pre-register

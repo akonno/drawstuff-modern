@@ -122,9 +122,17 @@ static void buildObjects()
 
 ObjectType object_type = SPHERE;
 int object_quality = 3; // default quality for spheres and cylinders
+static const char* kHelpText =
+    "Keys:\n"
+    "  Space : cycle SPHERE->CYLINDER->CAPSULE->BOX\n"
+    "  S/Y/C/B : select SPHERE/CYLINDER/CAPSULE/BOX\n"
+    "  +/- or 1/2/3 : sphere and capsule quality\n"
+    "  R : rebuild objects\n";
 
 static void start()
 {
+    std::cout << kHelpText << std::endl;
+
     g_fps_hud.init();
 
     // Camera: back and above
@@ -180,11 +188,6 @@ static void simLoop(int /*pause*/)
             dsDrawBox(s.pos, R, sides);
         }
     }
-
-    // HUD FPS表示
-    g_fps_hud.tick();
-
-    g_fps_hud.render(800, 600); // 仮のフレームバッファサイズ
 }
 
 static void command(int cmd)
@@ -281,6 +284,14 @@ static void command(int cmd)
     }
 }
 
+static void postStep(int pause)
+{
+    // HUD FPS表示
+    g_fps_hud.tick();
+
+    g_fps_hud.render(1280, 720); // 仮のフレームバッファサイズ
+}
+
 int main(int argc, char **argv)
 {
     buildObjects();
@@ -292,6 +303,7 @@ int main(int argc, char **argv)
     fn.command = &command;
     fn.stop = nullptr;
     fn.path_to_textures = "../textures";
+    fn.postStep = &postStep;
 
     dsSimulationLoop(argc, argv, 1280, 720, &fn);
     return 0;

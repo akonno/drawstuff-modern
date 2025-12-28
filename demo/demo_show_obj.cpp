@@ -257,7 +257,16 @@ static float g_R[12]  = {
 static int gridExtent = 2;
 static int g_solid = 1;
 
+static const char* kHelpText =
+    "Keys:\n"
+    "  W : wireframe\n"
+    "  S : solid\n"
+    "  +/- : grid extent\n"
+    "  Space : toggle draw mode\n"
+    "    triangles / registered mesh\n";
+
 static void simStart() {
+    std::cout << kHelpText << std::endl;
     g_fps_hud.init();
 
   // viewpoint: center + a bit back
@@ -318,14 +327,16 @@ static void simStep(int /*pause*/)
             }
         }
     }
-
-    // HUD FPS表示
-    g_fps_hud.tick();
-
-    g_fps_hud.render(800, 600); // 仮のフレームバッファサイズ
 }
 
 static void simStop() {}
+
+static void postStep(int pause)
+{
+    // HUD FPS display
+    g_fps_hud.tick();
+    g_fps_hud.render(1024, 768); // adjust if needed
+}
 
 // ------------------------------
 // main
@@ -360,12 +371,13 @@ int main(int argc, char** argv) {
         g_vertices, g_indices);
 
     dsFunctions fn;
-    std::memset(&fn, 0, sizeof(fn));
     fn.version = DS_VERSION;
     fn.start = &simStart;
     fn.step = &simStep;
     fn.command = &simCommand;
     fn.stop = &simStop;
+    fn.path_to_textures = "../textures";
+    fn.postStep = &postStep;
 
     // window size etc.
     dsSimulationLoop(argc, argv, 1024, 768, &fn);

@@ -342,11 +342,14 @@ namespace ds_internal {
         std::this_thread::sleep_for(std::chrono::microseconds(usecs));
     }
 
-        void DrawstuffApp::processRenderFrame(int *frame, const dsFunctions *fn)
+    void DrawstuffApp::processRenderFrame(int *frame, const dsFunctions *fn)
     {
         renderFrame(width, height, fn, pausemode && !singlestep);
         singlestep = 0;
 
+        if (fn->postStep)
+            fn->postStep(pausemode);
+        
         glFlush();
         glXSwapBuffers(display, win);
         XSync(display, 0);
@@ -368,6 +371,9 @@ namespace ds_internal {
 
         startGraphics(window_width, window_height, fn);
         
+        if (fn->start)
+            fn->start();
+
         static bool firsttime = true;
         if (firsttime)
         {
@@ -390,9 +396,6 @@ namespace ds_internal {
                 "\n");
             firsttime = false;
         }
-
-        if (fn->start)
-            fn->start();
 
         timeval tv;
         gettimeofday(&tv, 0);

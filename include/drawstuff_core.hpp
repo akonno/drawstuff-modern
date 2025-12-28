@@ -60,6 +60,14 @@ typedef struct dsFunctions
 
     /* version 2 data */
     const char *path_to_textures; /* if nonzero, path to texture files */
+    
+    // ★追加：内部描画（instancing flush等）完了後、swap直前に呼ぶ
+    void (*postStep)(int pause);
+    // コンストラクタでメンバを初期化
+    dsFunctions() : version(2), start(nullptr), step(nullptr), command(nullptr), stop(nullptr),
+                      path_to_textures(nullptr), postStep(nullptr)
+    {
+    }
 } dsFunctions;
 
 namespace
