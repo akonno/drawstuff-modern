@@ -75,6 +75,25 @@ scales much better with increasing object counts.
 The API remains drawstuff-compatible, but internally the rendering model
 is fundamentally different from the original immediate-mode approach.
 
+## Rendering Order and Frame Lifecycle
+
+Because drawstuff-modern relies heavily on instanced and batched rendering,
+draw calls issued from the user `step()` callback are not always executed
+immediately.
+
+Instead, geometry is often collected and flushed later in the frame, after
+`step()` returns. This design choice improves performance and scalability,
+but it also means that drawing overlays or HUD elements directly from
+`step()` can lead to unexpected ordering issues.
+
+To address this, the rendering pipeline provides a `postStep()` callback,
+which is invoked after all internal 3D rendering has completed and just
+before the frame is presented. User-defined overlays and HUDs are expected
+to be rendered at this stage.
+
+This separation of responsibilities reflects the internal rendering model
+and avoids special-case handling in the core pipeline.
+
 ---
 
 ## Design Philosophy
@@ -97,6 +116,22 @@ Several guiding principles influenced the overall design:
 - **Research-oriented trade-offs**  
   The library is optimized for research workflows, not for game development
   or visual effects production.
+
+## Notes on Rendering Quality Trade-offs
+
+Some aspects of the rendering pipeline intentionally favor predictability
+and performance over visual fidelity.
+
+For example, shadow rendering uses reduced geometric detail compared to
+the main object geometry.
+
+At the same time, distance-based LOD and explicit culling mechanisms are
+not currently implemented.
+
+As a result, the rendering pipeline remains relatively simple and
+predictable, which is particularly helpful for research use and
+debugging, especially at the current stage of development.
+
 
 ---
 

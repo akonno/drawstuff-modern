@@ -35,9 +35,9 @@ The following limitations are known in the current implementation:
   Native Windows and macOS platforms are not supported at this time.
 
 - **Convex shapes**  are supported in the core-based rendering pipeline.
-A convex polyhedron is tessellated on the CPU into a temporary list of triangles
-(e.g., via triangle fans per face) and rendered in a single batched draw call.
-Unlike **TriMesh**, convex shapes are not yet cached or registered as persistent GPU meshes.
+  A convex polyhedron is tessellated on the CPU into a temporary list of triangles
+  (e.g., via triangle fans per face) and rendered in a single batched draw call.
+  Unlike **TriMesh**, convex shapes are not yet cached or registered as persistent GPU meshes.
 
 
 These limitations are primarily related to performance optimization and do not
@@ -66,6 +66,23 @@ rather than in `step()`.
 Several demo programs under `demo/demo_*.cpp` include simple HUD examples,
 such as FPS counters, implemented using `postStep()`, which can be used as
 reference code.
+
+### Rendering quality and performance notes
+
+To balance performance and visual clarity, drawstuff-modern applies several
+simplifications in its current rendering pipeline:
+
+- **Shadow rendering** uses reduced geometric detail compared to the main
+  object geometry. This lower-detail representation is applied intentionally
+  to reduce rendering cost for shadows.
+
+- **No distance-based level-of-detail (LOD)** is currently implemented for
+  object geometry. All objects are rendered using uniform quality settings
+  (e.g., sphere or capsule tessellation levels), regardless of distance.
+
+- **No explicit view-frustum or object culling** is currently performed by
+  the library. Aside from any automatic culling handled internally by the
+  OpenGL driver, all issued draw calls are submitted as-is.
 
 ### Fast rendering of TriMesh objects (drawstuff-modern extension)
 
@@ -119,8 +136,6 @@ for using OpenGL 3.3 core and instanced rendering, see
 ## Build and Run
 
 ### Build
-
-## Build and Run
 
 This library currently targets Linux or WSL environments with an X11 display server
 and OpenGL 3.3 support.
