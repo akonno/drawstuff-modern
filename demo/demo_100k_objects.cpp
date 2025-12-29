@@ -29,10 +29,11 @@ struct Object
 
 enum ObjectType
 {
-    SPHERE,
-    CYLINDER,
-    CAPSULE,
-    BOX
+    SPHERE = 0,
+    CYLINDER = 1,
+    CAPSULE = 2,
+    BOX = 3,
+    MIXTURE = 4
 };
 
 static std::vector<Object> g_objects;
@@ -124,16 +125,26 @@ ObjectType object_type = SPHERE;
 int object_quality = 3; // default quality for spheres and cylinders
 static const char* kHelpText =
     "Keys:\n"
-    "  Space : cycle SPHERE->CYLINDER->CAPSULE->BOX\n"
-    "  S/Y/C/B : select SPHERE/CYLINDER/CAPSULE/BOX\n"
+    "  Space : cycle SPHERE->CYLINDER->CAPSULE->BOX->MIXTURE\n"
+    "  S/Y/C/B/M : select SPHERE/CYLINDER/CAPSULE/BOX/MIXTURE\n"
     "  +/- or 1/2/3 : sphere and capsule quality\n"
     "  R : rebuild objects\n";
+std::vector<uint8_t> g_object_type;
+static thread_local std::mt19937 rng(std::random_device{}());
 
 static void start()
 {
     std::cout << kHelpText << std::endl;
 
     g_fps_hud.init();
+
+    // Initialize object types vector
+    g_object_type.resize(static_cast<size_t>(NX) * NY * NZ, SPHERE);
+    for (size_t i = 0; i < g_object_type.size(); ++i)
+    {
+        g_object_type[i] = static_cast<uint8_t>(i % 4);
+    }
+    std::shuffle(g_object_type.begin(), g_object_type.end(), rng);
 
     // Camera: back and above
     float xyz[3] = {0.0f, -18.0f, 8.0f};
@@ -182,10 +193,43 @@ static void simLoop(int /*pause*/)
             }
             dsDrawCapsule(s.pos, R, L_capsule, s.r);
         }
-        else // BOX
+        else if (object_type == BOX)
         {
             float sides[3] = {s.r * 2.0f, s.r * 2.0f, s.l};
             dsDrawBox(s.pos, R, sides);
+        }
+        else
+        {
+            // MIXTURE: randomly choose one of the four types
+            int choice = g_object_type[uint64_t(&s - &g_objects[0])];
+            switch (choice)
+            {
+                case 0:
+                    dsDrawSphere(s.pos, R, s.r);
+                    break;
+                case 1:
+                    dsDrawCylinder(s.pos, R, s.l, s.r);
+                    break;
+                case 2:
+                {
+                    const float L_capsule = PITCH - 2.0f * s.r - 0.5f * MARGIN;
+                    if (L_capsule < 0.0f)
+                    {
+                        dsDrawSphere(s.pos, R, s.r);
+                    }
+                    else
+                    {
+                        dsDrawCapsule(s.pos, R, L_capsule, s.r);
+                    }
+                    break;
+                }
+                case 3:
+                {
+                    float sides[3] = {s.r * 2.0f, s.r * 2.0f, s.l};
+                    dsDrawBox(s.pos, R, sides);
+                    break;
+                }
+            }
         }
     }
 }
@@ -211,10 +255,15 @@ static void command(int cmd)
             object_type = BOX;
             type_name = "BOX";
         }
-        else
+        else if (object_type == BOX)
         {
-            object_type = SPHERE;
-            type_name = "SPHERE";
+            object_type = MIXTURE;
+            type_name = "MIXTURE";
+        }
+        else // MIXTURE
+        {
+            object_type = MIXTURE;
+            type_name = "MIXTURE";
         }
         
         std::cerr << "Switched to " << type_name << " mode." << std::endl;
@@ -238,6 +287,11 @@ static void command(int cmd)
     {
         object_type = BOX;
         std::cerr << "Switched to BOX mode." << std::endl;
+    }
+    else if (cmd == 'm' || cmd == 'M')
+    {
+        object_type = MIXTURE;
+        std::cerr << "Switched to MIXTURE mode." << std::endl;
     }
     else if (cmd == '+')
     {
@@ -280,6 +334,7 @@ static void command(int cmd)
     else if (cmd == 'r' || cmd == 'R')
     {
         buildObjects();
+        std::shuffle(g_object_type.begin(), g_object_type.end(), rng);
         std::cerr << "Rebuilt objects." << std::endl;
     }
 }
